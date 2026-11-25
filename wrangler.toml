@@ -5,4 +5,4 @@ pages_build_output_dir = "dist"
 [[d1_databases]]
 binding = "DB"
 database_name = "linkvault-db"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_id = "0dd65d07-e173-4ff1-9f35-ba78feb5e7dc"
