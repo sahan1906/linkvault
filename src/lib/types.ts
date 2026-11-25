@@ -175,4 +175,5 @@ export interface AdminSettings {
   min_withdraw_micros: string;
   currency_label: string;
   payout_channel_url: string;
+  show_payout_channel: string;
 }

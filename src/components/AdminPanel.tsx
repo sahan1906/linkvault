@@ -238,7 +238,12 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
       setSettings(res.settings);
       setSettingsNotice('Settings saved and applied across all endpoints.');
     } catch (err) {
-      setSettingsNotice(err instanceof Error ? err.message : 'Failed to save settings.');
+      if (err instanceof Error && err.message.toLowerCase().includes('authentication')) {
+        setAdminToken('');
+        setAuthError('Admin session expired. Please sign in again.');
+      } else {
+        setSettingsNotice(err instanceof Error ? err.message : 'Failed to save settings.');
+      }
     } finally {
       setSavingSettings(false);
     }
@@ -254,7 +259,12 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
       );
       setSettingsNotice(`Webhook active: ${res.webhook_url} (${res.description})`);
     } catch (err) {
-      setSettingsNotice(err instanceof Error ? err.message : 'Webhook setup failed.');
+      if (err instanceof Error && err.message.toLowerCase().includes('authentication')) {
+        setAdminToken('');
+        setAuthError('Admin session expired. Please sign in again.');
+      } else {
+        setSettingsNotice(err instanceof Error ? err.message : 'Webhook setup failed.');
+      }
     } finally {
       setWebhookLoading(false);
     }
@@ -285,7 +295,12 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
           : 'Brand logo uploaded to D1 and applied live across the Mini App.'
       );
     } catch (err) {
-      setSettingsNotice(err instanceof Error ? err.message : 'Logo upload failed.');
+      if (err instanceof Error && err.message.toLowerCase().includes('authentication')) {
+        setAdminToken('');
+        setAuthError('Admin session expired. Please sign in again.');
+      } else {
+        setSettingsNotice(err instanceof Error ? err.message : 'Logo upload failed.');
+      }
     } finally {
       setLogoUploading(false);
     }
@@ -1113,7 +1128,6 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
                       ['rate_in_micros', 'India (IN) Rate / 1K views (micros)', '450000'],
                       ['rate_global_micros', 'Global Rate / 1K views (micros)', '650000'],
                       ['min_withdraw_micros', 'Minimum Withdrawal (micros)', '2000000'],
-                      ['payout_channel_url', 'Public Payout Proof Channel URL', 'https://t.me/LinkVaultPayouts'],
                     ] as Array<[keyof AdminSettings, string, string]>
                   ).map(([key, label, placeholder]) => (
                     <div key={key}>
@@ -1134,6 +1148,61 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
                       />
                     </div>
                   ))}
+
+                  {/* Public Payout Proof Channel Toggle */}
+                  <div className="pt-3 border-t border-white/10 space-y-3">
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-xs font-semibold text-white">
+                          Public Payout Proof Channel Link
+                        </p>
+                        <p className="text-[11px] text-zinc-400 mt-0.5">
+                          {settings.show_payout_channel === '1'
+                            ? 'Shown as a Channel button on the Wallet & Payouts Proof card.'
+                            : 'Hidden on Wallet & Payouts (in-app proof feed still stays visible).'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={settings.show_payout_channel === '1'}
+                        onClick={() =>
+                          setSettings({
+                            ...settings,
+                            show_payout_channel: settings.show_payout_channel === '1' ? '0' : '1',
+                          })
+                        }
+                        className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition-colors ${
+                          settings.show_payout_channel === '1'
+                            ? 'bg-emerald-500 border-emerald-400'
+                            : 'bg-[#08080A] border-white/15'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
+                            settings.show_payout_channel === '1' ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    {settings.show_payout_channel === '1' && (
+                      <div>
+                        <label className="block text-xs text-zinc-300 mb-1">
+                          Public Payout Proof Channel URL
+                        </label>
+                        <input
+                          type="url"
+                          value={settings.payout_channel_url || ''}
+                          onChange={(e) =>
+                            setSettings({ ...settings, payout_channel_url: e.target.value })
+                          }
+                          placeholder="https://t.me/YourPayoutsChannel"
+                          className="w-full min-h-[42px] rounded-xl bg-[#08080A] border border-white/10 px-3.5 font-mono text-xs text-white placeholder:text-zinc-600 focus:border-emerald-500/60 focus:outline-none"
+                        />
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 

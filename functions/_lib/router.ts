@@ -48,6 +48,7 @@ const ALLOWED_SETTING_KEYS = new Set([
   'min_withdraw_micros',
   'currency_label',
   'payout_channel_url',
+  'show_payout_channel',
 ]);
 
 const ALLOWED_IMAGE_MIMES = new Set([
@@ -173,13 +174,40 @@ function computeExpiryTimestamp(expiry: unknown): number | null {
   return null;
 }
 
-async function requireAdmin(request: Request, env: Env): Promise<{ ok: boolean }> {
+async function resolveSigningSecret(env: Env, settings: AppSettingsMap): Promise<string> {
+  const envKey = (env.CLICK_HMAC_SECRET || '').trim();
+  if (envKey.length > 0) {
+    return sha256Hex(`lv_hmac_v1:${envKey}`);
+  }
+  const existing = (settings.signing_secret || '').trim();
+  if (existing.length >= 32) {
+    return existing;
+  }
+  const generated = getSigningSecret();
+  await env.DB.prepare(
+    "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('signing_secret', ?)"
+  )
+    .bind(generated)
+    .run();
+  const persisted = await env.DB.prepare(
+    "SELECT value FROM app_settings WHERE key = 'signing_secret' LIMIT 1"
+  ).first<{ value: string }>();
+  const finalSecret = (persisted?.value || generated).trim();
+  settings.signing_secret = finalSecret;
+  return finalSecret;
+}
+
+async function requireAdmin(
+  request: Request,
+  env: Env,
+  settings: AppSettingsMap
+): Promise<{ ok: boolean }> {
   const authHeader = request.headers.get('Authorization') || '';
   if (!authHeader.startsWith('Bearer ')) return { ok: false };
   const token = authHeader.slice(7).trim();
   if (!token) return { ok: false };
 
-  const secret = getSigningSecret(env.CLICK_HMAC_SECRET || env.ADMIN_PASSWORD);
+  const secret = await resolveSigningSecret(env, settings);
   const payload = await verifyToken<{ role?: string; exp?: number }>(token, secret);
   if (!payload || payload.role !== 'admin') return { ok: false };
   return { ok: true };
@@ -513,7 +541,8 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
     return jsonResponse({
       status: 'success',
       currency_label: settings.currency_label || 'USDT',
-      payout_channel_url: settings.payout_channel_url || '',
+      payout_channel_url:
+        settings.show_payout_channel === '1' ? settings.payout_channel_url || '' : '',
       payouts: results.map((w) => ({
         id: w.id,
         masked_user: maskUsername(w.username, w.telegram_id),
@@ -879,7 +908,7 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
       return errorResponse('This link has expired.', 410);
     }
 
-    const secret = getSigningSecret(env.CLICK_HMAC_SECRET || env.ADMIN_PASSWORD);
+    const secret = await resolveSigningSecret(env, settings);
     const verifyTokenStr = await signToken(
       {
         slug: link.slug,
@@ -924,7 +953,7 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
       return errorResponse('Ad completion verification is required before unlocking.', 400);
     }
 
-    const secret = getSigningSecret(env.CLICK_HMAC_SECRET || env.ADMIN_PASSWORD);
+    const secret = await resolveSigningSecret(env, settings);
     const payload = await verifyToken<{
       slug: string;
       link_id: number;
@@ -1070,7 +1099,8 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
         total_paid_micros: totalPaidMicros,
         min_withdraw_micros: Number(settings.min_withdraw_micros) || 2000000,
         currency_label: settings.currency_label || 'USDT',
-        payout_channel_url: settings.payout_channel_url || '',
+        payout_channel_url:
+          settings.show_payout_channel === '1' ? settings.payout_channel_url || '' : '',
       },
       my_withdrawals: myWithdrawals,
       public_payouts: publicPayouts.map((w) => ({
@@ -1188,7 +1218,7 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
       return errorResponse('Admin password was already claimed.', 403);
     }
 
-    const secret = getSigningSecret(env.CLICK_HMAC_SECRET || env.ADMIN_PASSWORD);
+    const secret = await resolveSigningSecret(env, settings);
     const token = await signToken(
       { role: 'admin', exp: Date.now() + 12 * 60 * 60 * 1000 },
       secret
@@ -1223,7 +1253,7 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
       return errorResponse('Invalid admin password.', 401);
     }
 
-    const secret = getSigningSecret(env.CLICK_HMAC_SECRET || env.ADMIN_PASSWORD);
+    const secret = await resolveSigningSecret(env, settings);
     const token = await signToken(
       { role: 'admin', exp: Date.now() + 12 * 60 * 60 * 1000 },
       secret
@@ -1234,7 +1264,7 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
 
   // ─── PROTECTED ADMIN ROUTES ──────────────────────────────────────────────
   if (path.startsWith('/api/admin/')) {
-    const auth = await requireAdmin(request, env);
+    const auth = await requireAdmin(request, env, settings);
     if (!auth.ok) {
       return errorResponse('Admin authentication required.', 401);
     }
@@ -1598,6 +1628,7 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
         admin_password_hash: _h,
         webhook_secret: _w,
         admin_api_key: _k,
+        signing_secret: _s,
         ...safeSettings
       } = settings;
       return jsonResponse({
@@ -1623,6 +1654,8 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
           strVal = cleanBotUsername(strVal);
         } else if (key === 'app_short_name') {
           strVal = cleanAppShortName(strVal);
+        } else if (key === 'show_payout_channel') {
+          strVal = strVal === '1' || strVal === 'true' ? '1' : '0';
         }
         if (key === 'payout_channel_url' && strVal && !validateHttpUrl(strVal)) {
           return errorResponse('Payout Channel URL must be a valid http:// or https:// URL.', 400);
@@ -1647,6 +1680,7 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
         admin_password_hash: _h,
         webhook_secret: _w,
         admin_api_key: _k,
+        signing_secret: _s,
         ...safeSettings
       } = updated;
       return jsonResponse({ status: 'success', settings: safeSettings });

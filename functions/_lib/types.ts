@@ -76,7 +76,9 @@ export interface AppSettingsMap {
   min_withdraw_micros: string;
   currency_label: string;
   payout_channel_url: string;
+  show_payout_channel: string;
   admin_password_hash?: string;
   webhook_secret?: string;
   admin_api_key?: string;
+  signing_secret?: string;
 }

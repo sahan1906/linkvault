@@ -13,7 +13,8 @@ export const DEFAULT_SETTINGS: AppSettingsMap = {
   rate_global_micros: '650000',
   min_withdraw_micros: '2000000',
   currency_label: 'USDT',
-  payout_channel_url: 'https://t.me/LinkVaultPayouts',
+  payout_channel_url: '',
+  show_payout_channel: '0',
 };
 
 const TIER1_COUNTRIES = new Set([
@@ -174,7 +175,8 @@ export function publicSettingsView(settings: AppSettingsMap) {
     rate_global_micros: Number(settings.rate_global_micros) || 650000,
     min_withdraw_micros: Number(settings.min_withdraw_micros) || 2000000,
     currency_label: settings.currency_label || 'USDT',
-    payout_channel_url: settings.payout_channel_url || '',
+    payout_channel_url:
+      settings.show_payout_channel === '1' ? settings.payout_channel_url || '' : '',
   };
 }
 
