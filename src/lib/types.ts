@@ -1,5 +1,6 @@
 export interface PublicSettings {
   site_name: string;
+  site_logo_url: string;
   bot_username: string;
   app_short_name: string;
   adsgram_block_id: string;
@@ -111,6 +112,7 @@ export interface UnlockPayload {
   };
   adsgram_block_id: string;
   site_name: string;
+  site_logo_url: string;
   verify_token: string;
 }
 
@@ -161,6 +163,7 @@ export interface AdminUserRow {
 
 export interface AdminSettings {
   site_name: string;
+  site_logo_url: string;
   bot_username: string;
   app_short_name: string;
   bot_token: string;

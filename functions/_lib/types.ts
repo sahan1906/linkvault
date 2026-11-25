@@ -64,6 +64,7 @@ export interface WithdrawalRow {
 
 export interface AppSettingsMap {
   site_name: string;
+  site_logo_url: string;
   bot_username: string;
   app_short_name: string;
   bot_token: string;

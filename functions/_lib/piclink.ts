@@ -81,6 +81,12 @@ export async function renderPicLinkPage(
   const domain = extractDomain(link.destination_url);
   const autoRedirect = url.searchParams.get('auto') === '1';
 
+  const brandLogoUrl = settings.site_logo_url
+    ? settings.site_logo_url.startsWith('/')
+      ? `${origin}${settings.site_logo_url}`
+      : settings.site_logo_url
+    : '';
+
   const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -106,6 +112,8 @@ export async function renderPicLinkPage(
     body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#08080A;color:#F4F4F6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:20px;}
     .wrap{width:100%;max-width:440px;}
     .brand{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;font-size:13px;color:#A1A1AA;}
+    .brand-left{display:flex;align-items:center;gap:10px;}
+    .brand-logo{width:28px;height:28px;border-radius:8px;object-fit:cover;border:1px solid rgba(255,255,255,0.12);}
     .brand strong{color:#F4F4F6;font-size:15px;letter-spacing:-0.01em;}
     .card{background:#111115;border:1px solid rgba(255,255,255,0.1);border-radius:20px;overflow:hidden;}
     .thumb{width:100%;aspect-ratio:16/9;background:#18181F;display:block;object-fit:cover;}
@@ -124,7 +132,10 @@ export async function renderPicLinkPage(
 <body>
   <main class="wrap">
     <div class="brand">
-      <strong>${escapeHtml(settings.site_name)}</strong>
+      <div class="brand-left">
+        ${brandLogoUrl ? `<img class="brand-logo" src="${escapeHtml(brandLogoUrl)}" alt="${escapeHtml(settings.site_name)}" referrerpolicy="no-referrer" />` : ''}
+        <strong>${escapeHtml(settings.site_name)}</strong>
+      </div>
       <span>Verified Preview</span>
     </div>
     <article class="card">

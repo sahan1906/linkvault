@@ -326,8 +326,18 @@ export function UnlockScreen({ slug, onExit, onUnlocked }: UnlockScreenProps) {
                 )}
 
                 <div className="pt-4 border-t border-white/10 flex items-center justify-between text-[11px] text-zinc-500">
-                  <span>{payload.site_name} Safe Preview</span>
-                  <span className="font-mono">/r/{payload.link.slug}</span>
+                  <div className="flex items-center gap-2 min-w-0">
+                    {payload.site_logo_url && (
+                      <img
+                        src={payload.site_logo_url}
+                        alt={payload.site_name}
+                        referrerPolicy="no-referrer"
+                        className="w-4 h-4 rounded object-cover shrink-0"
+                      />
+                    )}
+                    <span className="truncate">{payload.site_name} Safe Preview</span>
+                  </div>
+                  <span className="font-mono shrink-0">/r/{payload.link.slug}</span>
                 </div>
               </div>
             </article>

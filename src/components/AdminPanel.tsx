@@ -14,11 +14,13 @@ import {
   Send,
   Settings,
   ShieldAlert,
+  Trash2,
+  Upload,
   Users,
   Wallet,
   XCircle,
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../lib/api.ts';
 import { formatMethodLabel, formatMicros, formatRelativeTime } from '../lib/telegram.ts';
 import type {
@@ -63,6 +65,11 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsNotice, setSettingsNotice] = useState('');
   const [webhookLoading, setWebhookLoading] = useState(false);
+  const [logoUploading, setLogoUploading] = useState(false);
+  const [logoImgError, setLogoImgError] = useState(false);
+  const logoInputRef = useRef<HTMLInputElement | null>(null);
+  const [newAdminPassword, setNewAdminPassword] = useState('');
+  const [updatingPassword, setUpdatingPassword] = useState(false);
 
   // Admin-only Developer API state
   const [adminApiKey, setAdminApiKey] = useState('');
@@ -250,6 +257,79 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
       setSettingsNotice(err instanceof Error ? err.message : 'Webhook setup failed.');
     } finally {
       setWebhookLoading(false);
+    }
+  };
+
+  const handleUploadLogo = async (file: File | undefined) => {
+    if (!file || !settings) return;
+    if (file.size > 2 * 1024 * 1024) {
+      setSettingsNotice('Logo image must be smaller than 2 MB.');
+      return;
+    }
+    setLogoUploading(true);
+    setSettingsNotice('');
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await apiFetch<{ url: string; storage: string }>('/api/admin/upload-logo', {
+        method: 'POST',
+        adminToken,
+        body: form,
+        isFormData: true,
+      });
+      setSettings({ ...settings, site_logo_url: res.url });
+      setLogoImgError(false);
+      setSettingsNotice(
+        res.storage === 'telegram'
+          ? 'Brand logo uploaded via Telegram Storage Channel and applied live.'
+          : 'Brand logo uploaded to D1 and applied live across the Mini App.'
+      );
+    } catch (err) {
+      setSettingsNotice(err instanceof Error ? err.message : 'Logo upload failed.');
+    } finally {
+      setLogoUploading(false);
+    }
+  };
+
+  const handleRemoveLogo = async () => {
+    if (!settings) return;
+    setSavingSettings(true);
+    setSettingsNotice('');
+    try {
+      const next = { ...settings, site_logo_url: '' };
+      const res = await apiFetch<{ settings: AdminSettings }>('/api/admin/settings', {
+        method: 'PUT',
+        adminToken,
+        body: next,
+      });
+      setSettings(res.settings);
+      setSettingsNotice('Custom logo removed. Reverted to default monogram.');
+    } catch (err) {
+      setSettingsNotice(err instanceof Error ? err.message : 'Could not remove logo.');
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
+  const handleChangeAdminPassword = async () => {
+    if (newAdminPassword.length < 8) {
+      setSettingsNotice('New admin password must be at least 8 characters.');
+      return;
+    }
+    setUpdatingPassword(true);
+    setSettingsNotice('');
+    try {
+      const res = await apiFetch<{ message: string }>('/api/admin/change-password', {
+        method: 'POST',
+        adminToken,
+        body: { new_password: newAdminPassword },
+      });
+      setNewAdminPassword('');
+      setSettingsNotice(res.message || 'Admin password updated.');
+    } catch (err) {
+      setSettingsNotice(err instanceof Error ? err.message : 'Could not update password.');
+    } finally {
+      setUpdatingPassword(false);
     }
   };
 
@@ -893,6 +973,81 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
                 </div>
               )}
 
+              {/* Brand Logo Upload Card */}
+              <div className="bg-[#111115] border border-white/10 rounded-2xl p-5 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-center gap-4 min-w-0">
+                    {settings.site_logo_url && !logoImgError ? (
+                      <img
+                        src={settings.site_logo_url}
+                        alt={settings.site_name || 'Brand Logo'}
+                        referrerPolicy="no-referrer"
+                        onError={() => setLogoImgError(true)}
+                        className="w-14 h-14 rounded-xl object-cover border border-white/15 bg-[#08080A] shrink-0"
+                      />
+                    ) : (
+                      <div className="w-14 h-14 rounded-xl bg-emerald-500 text-zinc-950 flex items-center justify-center font-bold text-lg shrink-0">
+                        {(settings.site_name || 'LV').slice(0, 2).toUpperCase()}
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <h3 className="text-sm font-semibold text-white">Brand Logo</h3>
+                      <p className="text-xs text-zinc-400 mt-0.5">
+                        Displayed in the Mini App header, sidebar, Unlock Screen, and PicLink preview pages. PNG, JPG, or WebP up to 2 MB.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <input
+                      ref={logoInputRef}
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp,image/gif"
+                      className="hidden"
+                      onChange={(e) => {
+                        handleUploadLogo(e.target.files?.[0]);
+                        e.target.value = '';
+                      }}
+                    />
+                    <button
+                      type="button"
+                      disabled={logoUploading}
+                      onClick={() => logoInputRef.current?.click()}
+                      className="min-h-[42px] px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-zinc-950 font-semibold text-xs inline-flex items-center gap-2 whitespace-nowrap transition-colors"
+                    >
+                      <Upload className="w-4 h-4" />
+                      <span>{logoUploading ? 'Uploading...' : 'Upload Logo'}</span>
+                    </button>
+                    {settings.site_logo_url && (
+                      <button
+                        type="button"
+                        onClick={handleRemoveLogo}
+                        className="min-h-[42px] px-3 rounded-xl border border-white/10 hover:bg-red-500/15 hover:border-red-500/30 text-zinc-400 hover:text-red-300 text-xs inline-flex items-center gap-1.5 whitespace-nowrap transition-colors"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Remove</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">
+                    Or paste direct Logo URL
+                  </label>
+                  <input
+                    type="text"
+                    value={settings.site_logo_url || ''}
+                    onChange={(e) => {
+                      setSettings({ ...settings, site_logo_url: e.target.value });
+                      setLogoImgError(false);
+                    }}
+                    placeholder="/api/img/... or https://..."
+                    className="w-full min-h-[42px] rounded-xl bg-[#08080A] border border-white/10 px-3.5 font-mono text-xs text-white placeholder:text-zinc-600 focus:border-emerald-500/60 focus:outline-none"
+                  />
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Telegram & AdsGram */}
                 <div className="bg-[#111115] border border-white/10 rounded-2xl p-5 space-y-4">
@@ -971,6 +1126,39 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
                     </div>
                   ))}
                 </div>
+              </div>
+
+              {/* Admin Password Security Card */}
+              <div className="bg-[#111115] border border-white/10 rounded-2xl p-5 space-y-3">
+                <h3 className="text-sm font-semibold text-white">Admin Password Security</h3>
+                {envManaged ? (
+                  <p className="text-xs text-zinc-400 leading-relaxed">
+                    Your admin password is managed securely via the <code className="font-mono text-emerald-400">ADMIN_PASSWORD</code> secret in Cloudflare Pages → Settings → Variables and Secrets. Update it there to rotate your password.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-xs text-zinc-400">
+                      Update the PBKDF2-hashed admin password stored in D1 (or set <code className="font-mono text-zinc-300">ADMIN_PASSWORD</code> in Cloudflare Secrets to override).
+                    </p>
+                    <div className="flex flex-col sm:flex-row gap-2.5">
+                      <input
+                        type="password"
+                        value={newAdminPassword}
+                        onChange={(e) => setNewAdminPassword(e.target.value)}
+                        placeholder="Enter new admin password (min 8 chars)"
+                        className="flex-1 min-h-[42px] rounded-xl bg-[#08080A] border border-white/10 px-3.5 text-xs text-white placeholder:text-zinc-600 focus:border-emerald-500/60 focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        disabled={updatingPassword || newAdminPassword.length < 8}
+                        onClick={handleChangeAdminPassword}
+                        className="min-h-[42px] px-4 rounded-xl border border-emerald-500/35 bg-emerald-500/10 hover:bg-emerald-500/20 disabled:opacity-45 text-emerald-300 text-xs font-semibold whitespace-nowrap"
+                      >
+                        {updatingPassword ? 'Updating...' : 'Update Password'}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </form>
           )}

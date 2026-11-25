@@ -34,6 +34,7 @@ const SYSTEM_DEMO_OWNER_ID = '900000001';
 
 const ALLOWED_SETTING_KEYS = new Set([
   'site_name',
+  'site_logo_url',
   'bot_username',
   'app_short_name',
   'bot_token',
@@ -895,6 +896,7 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
       },
       adsgram_block_id: settings.adsgram_block_id || '',
       site_name: settings.site_name || 'LinkVault',
+      site_logo_url: settings.site_logo_url || '',
       verify_token: verifyTokenStr,
     });
   }
@@ -1450,6 +1452,135 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
       });
     }
 
+    // Admin Brand Logo Upload (stored in Telegram Storage Channel or D1 uploaded_images)
+    if (path === '/api/admin/upload-logo' && method === 'POST') {
+      let mimeType = '';
+      let imageBytes: Uint8Array | null = null;
+      let fileName = 'brand-logo.png';
+
+      const contentType = request.headers.get('Content-Type') || '';
+      if (contentType.includes('multipart/form-data')) {
+        const formData = await request.formData();
+        const file = formData.get('file');
+        if (!file || typeof file === 'string') {
+          return errorResponse('No logo file uploaded', 400);
+        }
+        mimeType = file.type || 'image/png';
+        fileName = file.name || 'brand-logo.png';
+        const buf = await file.arrayBuffer();
+        if (buf.byteLength === 0 || buf.byteLength > 2 * 1024 * 1024) {
+          return errorResponse('Logo image must be smaller than 2 MB', 400);
+        }
+        imageBytes = new Uint8Array(buf);
+      } else {
+        let body: { mime_type?: string; data_base64?: string } = {};
+        try {
+          body = (await request.json()) as typeof body;
+        } catch {
+          return errorResponse('Invalid upload body', 400);
+        }
+        mimeType = String(body.mime_type || 'image/png');
+        const b64 = String(body.data_base64 || '').replace(/^data:image\/[a-z+]+;base64,/, '');
+        if (!b64) return errorResponse('Missing logo image data', 400);
+        imageBytes = base64ToUint8Array(b64);
+        if (imageBytes.byteLength === 0 || imageBytes.byteLength > 2 * 1024 * 1024) {
+          return errorResponse('Logo image must be smaller than 2 MB', 400);
+        }
+      }
+
+      if (!ALLOWED_IMAGE_MIMES.has(mimeType)) {
+        return errorResponse('Supported logo formats: PNG, JPG, WebP, GIF', 400);
+      }
+
+      let logoUrl = '';
+      let storage = 'd1';
+
+      const botToken = getEffectiveBotToken(settings, env.TELEGRAM_BOT_TOKEN);
+      const storageChannelId = (settings.storage_channel_id || '').trim();
+
+      if (botToken && storageChannelId) {
+        try {
+          const tgForm = new FormData();
+          tgForm.append('chat_id', storageChannelId);
+          const blob = new Blob(
+            [imageBytes.buffer.slice(imageBytes.byteOffset, imageBytes.byteOffset + imageBytes.byteLength) as ArrayBuffer],
+            { type: mimeType }
+          );
+          tgForm.append('photo', blob, fileName);
+
+          const tgRes = await fetch(
+            `https://api.telegram.org/bot${encodeURIComponent(botToken)}/sendPhoto`,
+            { method: 'POST', body: tgForm }
+          );
+          const tgJson = (await tgRes.json()) as {
+            ok?: boolean;
+            result?: { photo?: Array<{ file_id: string }> };
+          };
+          const photos = tgJson.result?.photo;
+          if (tgJson.ok && photos && photos.length > 0) {
+            const bestFileId = photos[photos.length - 1].file_id;
+            logoUrl = `/api/img/${encodeURIComponent(bestFileId)}`;
+            storage = 'telegram';
+          }
+        } catch {
+          // Fall back cleanly to D1 image storage
+        }
+      }
+
+      if (!logoUrl) {
+        const fileId = randomFileId();
+        const b64 = arrayBufferToBase64(
+          imageBytes.buffer.slice(imageBytes.byteOffset, imageBytes.byteOffset + imageBytes.byteLength) as ArrayBuffer
+        );
+        await env.DB.prepare(
+          'INSERT INTO uploaded_images (file_id, mime_type, data_base64, created_at) VALUES (?, ?, ?, ?)'
+        )
+          .bind(fileId, mimeType, b64, Date.now())
+          .run();
+        logoUrl = `/api/img/${encodeURIComponent(fileId)}`;
+      }
+
+      await env.DB.prepare(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('site_logo_url', ?)"
+      )
+        .bind(logoUrl)
+        .run();
+
+      return jsonResponse({
+        status: 'success',
+        url: logoUrl,
+        storage,
+      });
+    }
+
+    // Update D1-stored Admin Password (when not managed by ADMIN_PASSWORD env var)
+    if (path === '/api/admin/change-password' && method === 'POST') {
+      if ((env.ADMIN_PASSWORD || '').trim()) {
+        return errorResponse(
+          'Admin password is managed by the ADMIN_PASSWORD environment secret in Cloudflare Pages.',
+          400
+        );
+      }
+      let body: { new_password?: string } = {};
+      try {
+        body = (await request.json()) as typeof body;
+      } catch {
+        return errorResponse('Invalid JSON payload', 400);
+      }
+      const nextPwd = String(body.new_password || '');
+      if (nextPwd.length < 8 || nextPwd.length > 128) {
+        return errorResponse('New password must be 8–128 characters.', 400);
+      }
+      const hashed = await hashPassword(nextPwd);
+      await env.DB.prepare(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('admin_password_hash', ?)"
+      )
+        .bind(hashed)
+        .run();
+
+      return jsonResponse({ status: 'success', message: 'Admin password updated in D1.' });
+    }
+
     // Settings
     if (path === '/api/admin/settings' && method === 'GET') {
       const {
@@ -1479,6 +1610,9 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
         const strVal = String(val ?? '').trim();
         if (key === 'payout_channel_url' && strVal && !validateHttpUrl(strVal)) {
           return errorResponse('Payout Channel URL must be a valid http:// or https:// URL.', 400);
+        }
+        if (key === 'site_logo_url' && strVal && validateImageUrl(strVal) === null) {
+          return errorResponse('Brand Logo URL must be a valid https:// URL or uploaded image path.', 400);
         }
         statements.push(
           env.DB.prepare('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)').bind(

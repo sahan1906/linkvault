@@ -2,6 +2,7 @@ import type { AppSettingsMap, D1Database } from './types.ts';
 
 export const DEFAULT_SETTINGS: AppSettingsMap = {
   site_name: 'LinkVault',
+  site_logo_url: '',
   bot_username: 'LinkVaultAppBot',
   app_short_name: 'app',
   bot_token: '',
@@ -143,6 +144,7 @@ export async function loadSettings(db: D1Database): Promise<AppSettingsMap> {
 export function publicSettingsView(settings: AppSettingsMap) {
   return {
     site_name: settings.site_name,
+    site_logo_url: settings.site_logo_url || '',
     bot_username: settings.bot_username,
     app_short_name: settings.app_short_name,
     adsgram_block_id: settings.adsgram_block_id,

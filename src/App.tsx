@@ -19,6 +19,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('create');
 
   const [bootstrap, setBootstrap] = useState<BootstrapResponse | null>(null);
+  const [logoError, setLogoError] = useState(false);
   const [bootError, setBootError] = useState('');
   const [links, setLinks] = useState<LinkItem[]>([]);
   const [linksLoading, setLinksLoading] = useState(false);
@@ -39,6 +40,7 @@ export default function App() {
     try {
       const res = await apiFetch<BootstrapResponse>('/api/bootstrap');
       setBootstrap(res);
+      setLogoError(false);
       setBootError('');
     } catch (err) {
       setBootError(err instanceof Error ? err.message : 'Unable to initialize LinkVault');
@@ -117,7 +119,9 @@ export default function App() {
   ];
 
   const siteName = bootstrap?.settings.site_name || 'LinkVault';
+  const siteLogoUrl = bootstrap?.settings.site_logo_url || '';
   const currency = bootstrap?.settings.currency_label || 'USDT';
+  const brandInitials = siteName.slice(0, 2).toUpperCase();
 
   const handleOpenPreview = (slug: string) => {
     setUnlockSlug(slug);
@@ -128,10 +132,20 @@ export default function App() {
       {/* Desktop Sidebar Navigation (keeps 1440px viewports clean & spacious) */}
       <aside className="hidden lg:flex lg:flex-col lg:w-60 border-r border-white/10 bg-[#0B0B0E] p-5 shrink-0 sticky top-0 h-screen">
         <div className="flex items-center gap-2.5 mb-8 px-1">
-          <div className="w-8 h-8 rounded-lg bg-emerald-500 text-zinc-950 flex items-center justify-center font-bold text-sm">
-            LV
-          </div>
-          <span className="text-base font-bold tracking-tight text-white whitespace-nowrap">
+          {siteLogoUrl && !logoError ? (
+            <img
+              src={siteLogoUrl}
+              alt={siteName}
+              referrerPolicy="no-referrer"
+              onError={() => setLogoError(true)}
+              className="w-8 h-8 rounded-lg object-cover border border-white/10 shrink-0"
+            />
+          ) : (
+            <div className="w-8 h-8 rounded-lg bg-emerald-500 text-zinc-950 flex items-center justify-center font-bold text-sm shrink-0">
+              {brandInitials}
+            </div>
+          )}
+          <span className="text-base font-bold tracking-tight text-white whitespace-nowrap truncate">
             {siteName}
           </span>
         </div>
@@ -173,9 +187,19 @@ export default function App() {
       {/* Mobile Compact Header (< lg) */}
       <header className="lg:hidden sticky top-0 z-30 h-13 px-4 border-b border-white/10 bg-[#08080A]/92 backdrop-blur-md flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 min-w-0">
-          <div className="w-7 h-7 rounded-lg bg-emerald-500 text-zinc-950 flex items-center justify-center font-bold text-xs shrink-0">
-            LV
-          </div>
+          {siteLogoUrl && !logoError ? (
+            <img
+              src={siteLogoUrl}
+              alt={siteName}
+              referrerPolicy="no-referrer"
+              onError={() => setLogoError(true)}
+              className="w-7 h-7 rounded-lg object-cover border border-white/10 shrink-0"
+            />
+          ) : (
+            <div className="w-7 h-7 rounded-lg bg-emerald-500 text-zinc-950 flex items-center justify-center font-bold text-xs shrink-0">
+              {brandInitials}
+            </div>
+          )}
           <span className="text-sm font-bold tracking-tight text-white truncate">
             {siteName}
           </span>
