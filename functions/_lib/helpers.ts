@@ -111,10 +111,31 @@ export function getEffectiveBotToken(settings: AppSettingsMap, envBotToken?: str
   return (settings.bot_token || envBotToken || '').trim();
 }
 
+export function cleanBotUsername(raw: string): string {
+  return (raw || '')
+    .trim()
+    .replace(/^https?:\/\/(t\.me|telegram\.me)\//i, '')
+    .replace(/^@+/, '')
+    .split('/')[0]
+    .trim();
+}
+
+export function cleanAppShortName(raw: string): string {
+  return (raw || '').trim().replace(/^\/+|\/+$/g, '');
+}
+
+export function isBotConfigured(settings: AppSettingsMap): boolean {
+  const bot = cleanBotUsername(settings.bot_username);
+  return Boolean(bot && bot.toLowerCase() !== 'linkvaultappbot');
+}
+
 export function buildTelegramUrl(slug: string, settings: AppSettingsMap): string {
-  const bot = (settings.bot_username || 'LinkVaultAppBot').replace(/^@+/, '').trim();
-  const app = (settings.app_short_name || 'app').trim();
-  return `https://t.me/${encodeURIComponent(bot)}/${encodeURIComponent(app)}?startapp=r_${encodeURIComponent(slug)}`;
+  const bot = cleanBotUsername(settings.bot_username) || 'LinkVaultAppBot';
+  const app = cleanAppShortName(settings.app_short_name);
+  if (app) {
+    return `https://t.me/${encodeURIComponent(bot)}/${encodeURIComponent(app)}?startapp=r_${encodeURIComponent(slug)}`;
+  }
+  return `https://t.me/${encodeURIComponent(bot)}?startapp=r_${encodeURIComponent(slug)}`;
 }
 
 export function buildPicLinkUrl(origin: string, slug: string): string {

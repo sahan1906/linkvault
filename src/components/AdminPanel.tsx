@@ -1057,8 +1057,8 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
                     [
                       ['site_name', 'Platform Name', 'LinkVault'],
                       ['adsgram_block_id', 'AdsGram Block ID', 'e.g. int-12345'],
-                      ['bot_username', 'Bot Username (without @)', 'LinkVaultAppBot'],
-                      ['app_short_name', 'Mini App Short Name', 'app'],
+                      ['bot_username', 'Bot Username (without @, from @BotFather)', 'YourRealBot'],
+                      ['app_short_name', 'Mini App Short Name (from /newapp, or leave blank for Main Mini App)', 'app'],
                       ['bot_token', 'Telegram Bot Token', '123456:ABC-DEF...'],
                       ['storage_channel_id', 'Storage Channel ID (for free image proxy)', '-1001234567890'],
                     ] as Array<[keyof AdminSettings, string, string]>
@@ -1074,6 +1074,15 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
                       />
                     </div>
                   ))}
+
+                  <div className="rounded-xl bg-[#08080A] border border-white/10 px-3.5 py-2.5 text-[11px] text-zinc-400 space-y-1">
+                    <p className="text-zinc-300 font-medium">Generated Telegram Link Format</p>
+                    <code className="block font-mono text-emerald-400 break-all">
+                      {settings.app_short_name.trim()
+                        ? `https://t.me/${settings.bot_username.replace(/^@+/, '').trim() || 'YourRealBot'}/${settings.app_short_name.trim()}?startapp=r_slug`
+                        : `https://t.me/${settings.bot_username.replace(/^@+/, '').trim() || 'YourRealBot'}?startapp=r_slug`}
+                    </code>
+                  </div>
 
                   <div className="pt-3 border-t border-white/10 space-y-2">
                     <p className="text-xs text-zinc-400">

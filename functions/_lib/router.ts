@@ -14,6 +14,8 @@ import {
 import {
   buildPicLinkUrl,
   buildTelegramUrl,
+  cleanAppShortName,
+  cleanBotUsername,
   errorResponse,
   extractDomain,
   getDayBucket,
@@ -438,9 +440,18 @@ export async function handleTelegramWebhook(
   const origin = getOrigin(request, env);
 
   if (botToken && text.startsWith('/start')) {
-    const welcomeText =
-      `Welcome to ${settings.site_name}.\n\n` +
-      `Create monetized Telegram short links, custom social PicLink cards, and QR codes with transparent payouts.`;
+    const startArg = text.split(/\s+/)[1]?.trim() || '';
+    const isUnlockStart = startArg.startsWith('r_') && startArg.length > 2;
+    const webAppUrl = isUnlockStart
+      ? `${origin}/?startapp=${encodeURIComponent(startArg)}`
+      : origin;
+    const buttonLabel = isUnlockStart
+      ? 'Unlock Destination Link'
+      : `Launch ${settings.site_name}`;
+    const welcomeText = isUnlockStart
+      ? `Tap the button below to open ${settings.site_name} and unlock your destination link.`
+      : `Welcome to ${settings.site_name}.\n\n` +
+        `Create monetized Telegram short links, custom social PicLink cards, and QR codes with transparent payouts.`;
 
     try {
       await fetch(`https://api.telegram.org/bot${encodeURIComponent(botToken)}/sendMessage`, {
@@ -453,8 +464,8 @@ export async function handleTelegramWebhook(
             inline_keyboard: [
               [
                 {
-                  text: `Launch ${settings.site_name}`,
-                  web_app: { url: origin },
+                  text: buttonLabel,
+                  web_app: { url: webAppUrl },
                 },
               ],
             ],
@@ -1607,7 +1618,12 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
       const statements = [];
       for (const [key, val] of Object.entries(body)) {
         if (!ALLOWED_SETTING_KEYS.has(key)) continue;
-        const strVal = String(val ?? '').trim();
+        let strVal = String(val ?? '').trim();
+        if (key === 'bot_username') {
+          strVal = cleanBotUsername(strVal);
+        } else if (key === 'app_short_name') {
+          strVal = cleanAppShortName(strVal);
+        }
         if (key === 'payout_channel_url' && strVal && !validateHttpUrl(strVal)) {
           return errorResponse('Payout Channel URL must be a valid http:// or https:// URL.', 400);
         }

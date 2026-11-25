@@ -2,6 +2,7 @@ import {
   buildTelegramUrl,
   escapeHtml,
   extractDomain,
+  isBotConfigured,
   loadSettings,
 } from './helpers.ts';
 import type { Env, LinkRow } from './types.ts';
@@ -81,6 +82,10 @@ export async function renderPicLinkPage(
   const domain = extractDomain(link.destination_url);
   const autoRedirect = url.searchParams.get('auto') === '1';
 
+  const botReady = isBotConfigured(settings);
+  const primaryHref = botReady ? telegramDeepLink : webPreviewUnlockUrl;
+  const primaryLabel = botReady ? 'Open in Telegram to Unlock' : 'Unlock Destination Link';
+
   const brandLogoUrl = settings.site_logo_url
     ? settings.site_logo_url.startsWith('/')
       ? `${origin}${settings.site_logo_url}`
@@ -144,17 +149,19 @@ export async function renderPicLinkPage(
         <div class="meta">Destination · ${escapeHtml(domain)}</div>
         <h1>${escapeHtml(pageTitle)}</h1>
         <p>${escapeHtml(pageDescription)}</p>
-        <a class="cta" id="tgBtn" href="${escapeHtml(telegramDeepLink)}">Open in Telegram to Unlock</a>
-        <a class="secondary" href="${escapeHtml(webPreviewUnlockUrl)}">Open Web Unlock Preview</a>
+        <a class="cta" id="tgBtn" href="${escapeHtml(primaryHref)}">${escapeHtml(primaryLabel)}</a>
+        ${botReady ? `<a class="secondary" href="${escapeHtml(webPreviewUnlockUrl)}">Open Web Unlock Preview</a>` : ''}
         <div class="foot">
           <span>Watch a short sponsored ad to unlock</span>
-          <label><input type="checkbox" id="autoToggle" ${autoRedirect ? 'checked' : ''} /> Auto-open mobile</label>
+          ${botReady ? `<label><input type="checkbox" id="autoToggle" ${autoRedirect ? 'checked' : ''} /> Auto-open mobile</label>` : ''}
         </div>
       </div>
     </article>
   </main>
   <script>
     (function(){
+      var botReady = ${botReady ? 'true' : 'false'};
+      if (!botReady) return;
       var tgUrl = ${JSON.stringify(telegramDeepLink).replace(/</g, '\\u003c')};
       var isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
       var toggle = document.getElementById('autoToggle');
