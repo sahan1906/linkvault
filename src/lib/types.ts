@@ -1,9 +1,35 @@
+export interface AdsGramUnit {
+  id: string;
+  label: string;
+  block_id: string;
+  enabled: boolean;
+}
+
+export interface CleanAdsUnit {
+  id: string;
+  label: string;
+  placement_id: string;
+  enabled: boolean;
+}
+
+export interface AdNetworkConfig {
+  adsgram_units: AdsGramUnit[];
+  cleanads_units: CleanAdsUnit[];
+  cleanads_test_mode: boolean;
+  monetag_enabled: boolean;
+  monetag_zone_id: string;
+  richads_enabled: boolean;
+  richads_pub_id: string;
+  richads_app_id: string;
+}
+
 export interface PublicSettings {
   site_name: string;
   site_logo_url: string;
   bot_username: string;
   app_short_name: string;
   adsgram_block_id: string;
+  ad_config?: AdNetworkConfig;
   rate_in_micros: number;
   rate_tier1_micros: number;
   rate_global_micros: number;
@@ -110,7 +136,9 @@ export interface UnlockPayload {
     is_owner: boolean;
     is_demo: boolean;
   };
+  viewer_telegram_id?: string;
   adsgram_block_id: string;
+  ad_config?: AdNetworkConfig;
   site_name: string;
   site_logo_url: string;
   verify_token: string;
@@ -169,6 +197,14 @@ export interface AdminSettings {
   bot_token: string;
   storage_channel_id: string;
   adsgram_block_id: string;
+  adsgram_units: string;
+  cleanads_units: string;
+  cleanads_test_mode: string;
+  monetag_enabled: string;
+  monetag_zone_id: string;
+  richads_enabled: string;
+  richads_pub_id: string;
+  richads_app_id: string;
   rate_in_micros: string;
   rate_tier1_micros: string;
   rate_global_micros: string;

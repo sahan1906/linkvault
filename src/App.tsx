@@ -5,6 +5,7 @@ import { CreateTab } from './components/CreateTab.tsx';
 import { LinksTab } from './components/LinksTab.tsx';
 import { UnlockScreen } from './components/UnlockScreen.tsx';
 import { WalletTab } from './components/WalletTab.tsx';
+import { removeMonetagScripts } from './lib/ads.ts';
 import { apiFetch } from './lib/api.ts';
 import { formatMicros, getStartAppSlug, initTelegramWebApp } from './lib/telegram.ts';
 import type { BootstrapResponse, LinkItem, WalletResponse } from './lib/types.ts';
@@ -42,6 +43,9 @@ export default function App() {
       setBootstrap(res);
       setLogoError(false);
       setBootError('');
+      if (!res.settings.ad_config?.monetag_enabled) {
+        removeMonetagScripts();
+      }
     } catch (err) {
       setBootError(err instanceof Error ? err.message : 'Unable to initialize LinkVault');
     }
@@ -231,7 +235,7 @@ export default function App() {
             {bootstrap && (
               <div className="flex items-center gap-2 text-xs text-zinc-400">
                 <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                <span>AdsGram Verified Revenue Sharing</span>
+                <span>Verified Creator Revenue Sharing</span>
               </div>
             )}
           </div>

@@ -1,4 +1,20 @@
-import type { AppSettingsMap, D1Database } from './types.ts';
+import type {
+  AdNetworkConfig,
+  AdsGramUnit,
+  AppSettingsMap,
+  CleanAdsUnit,
+  D1Database,
+} from './types.ts';
+
+export const DEFAULT_ADSGRAM_UNITS: AdsGramUnit[] = [
+  { id: 'ag_1', label: 'AdsGram Unit 1 (Rewarded)', block_id: '', enabled: false },
+  { id: 'ag_2', label: 'AdsGram Unit 2 (Interstitial)', block_id: '', enabled: false },
+];
+
+export const DEFAULT_CLEANADS_UNITS: CleanAdsUnit[] = [
+  { id: 'ca_1', label: 'CleanAds Rewarded', placement_id: '', enabled: false },
+  { id: 'ca_2', label: 'CleanAds Interstitial', placement_id: '', enabled: false },
+];
 
 export const DEFAULT_SETTINGS: AppSettingsMap = {
   site_name: 'LinkVault',
@@ -8,6 +24,14 @@ export const DEFAULT_SETTINGS: AppSettingsMap = {
   bot_token: '',
   storage_channel_id: '',
   adsgram_block_id: '',
+  adsgram_units: '',
+  cleanads_units: '',
+  cleanads_test_mode: '0',
+  monetag_enabled: '0',
+  monetag_zone_id: '',
+  richads_enabled: '0',
+  richads_pub_id: '',
+  richads_app_id: '',
   rate_in_micros: '450000',
   rate_tier1_micros: '1200000',
   rate_global_micros: '650000',
@@ -163,13 +187,92 @@ export async function loadSettings(db: D1Database): Promise<AppSettingsMap> {
   return map as unknown as AppSettingsMap;
 }
 
+export function sanitizeAdsGramUnits(raw: unknown, legacyBlockId = ''): AdsGramUnit[] {
+  let list: unknown[] = [];
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) list = parsed;
+    } catch {
+      list = [];
+    }
+  } else if (Array.isArray(raw)) {
+    list = raw;
+  }
+
+  if (list.length === 0) {
+    const legacy = (legacyBlockId || '').trim().slice(0, 80);
+    return DEFAULT_ADSGRAM_UNITS.map((u, idx) =>
+      idx === 0 && legacy ? { ...u, block_id: legacy, enabled: true } : { ...u }
+    );
+  }
+
+  return list.slice(0, 20).map((item, idx) => {
+    const obj = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
+    const id = String(obj.id || `ag_${idx + 1}`).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32) || `ag_${idx + 1}`;
+    const label = String(obj.label || `AdsGram Unit ${idx + 1}`).trim().slice(0, 64);
+    const blockId = String(obj.block_id || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+    const enabled = Boolean(obj.enabled);
+    return { id, label, block_id: blockId, enabled };
+  });
+}
+
+export function sanitizeCleanAdsUnits(raw: unknown): CleanAdsUnit[] {
+  let list: unknown[] = [];
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) list = parsed;
+    } catch {
+      list = [];
+    }
+  } else if (Array.isArray(raw)) {
+    list = raw;
+  }
+
+  if (list.length === 0) {
+    return DEFAULT_CLEANADS_UNITS.map((u) => ({ ...u }));
+  }
+
+  return list.slice(0, 20).map((item, idx) => {
+    const obj = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
+    const id = String(obj.id || `ca_${idx + 1}`).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32) || `ca_${idx + 1}`;
+    const label = String(obj.label || `CleanAds Unit ${idx + 1}`).trim().slice(0, 64);
+    const placementId = String(obj.placement_id || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+    const enabled = Boolean(obj.enabled);
+    return { id, label, placement_id: placementId, enabled };
+  });
+}
+
+export function parseAdConfig(settings: AppSettingsMap): AdNetworkConfig {
+  const adsgramUnits = sanitizeAdsGramUnits(settings.adsgram_units, settings.adsgram_block_id);
+  const cleanadsUnits = sanitizeCleanAdsUnits(settings.cleanads_units);
+  const monetagZoneId = (settings.monetag_zone_id || '').replace(/\D/g, '').slice(0, 24);
+  const richadsPubId = (settings.richads_pub_id || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+  const richadsAppId = (settings.richads_app_id || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+
+  return {
+    adsgram_units: adsgramUnits,
+    cleanads_units: cleanadsUnits,
+    cleanads_test_mode: settings.cleanads_test_mode === '1' || settings.cleanads_test_mode === 'true',
+    monetag_enabled: settings.monetag_enabled === '1' || settings.monetag_enabled === 'true',
+    monetag_zone_id: monetagZoneId,
+    richads_enabled: settings.richads_enabled === '1' || settings.richads_enabled === 'true',
+    richads_pub_id: richadsPubId,
+    richads_app_id: richadsAppId,
+  };
+}
+
 export function publicSettingsView(settings: AppSettingsMap) {
+  const adConfig = parseAdConfig(settings);
+  const firstActiveAdsGram = adConfig.adsgram_units.find((u) => u.enabled && u.block_id);
   return {
     site_name: settings.site_name,
     site_logo_url: settings.site_logo_url || '',
     bot_username: settings.bot_username,
     app_short_name: settings.app_short_name,
-    adsgram_block_id: settings.adsgram_block_id,
+    adsgram_block_id: firstActiveAdsGram?.block_id || settings.adsgram_block_id || '',
+    ad_config: adConfig,
     rate_in_micros: Number(settings.rate_in_micros) || 450000,
     rate_tier1_micros: Number(settings.rate_tier1_micros) || 1200000,
     rate_global_micros: Number(settings.rate_global_micros) || 650000,

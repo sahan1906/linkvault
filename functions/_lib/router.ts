@@ -24,7 +24,10 @@ import {
   jsonResponse,
   loadSettings,
   maskUsername,
+  parseAdConfig,
   publicSettingsView,
+  sanitizeAdsGramUnits,
+  sanitizeCleanAdsUnits,
   sanitizeSlug,
   validateHttpUrl,
   validateImageUrl,
@@ -42,6 +45,14 @@ const ALLOWED_SETTING_KEYS = new Set([
   'bot_token',
   'storage_channel_id',
   'adsgram_block_id',
+  'adsgram_units',
+  'cleanads_units',
+  'cleanads_test_mode',
+  'monetag_enabled',
+  'monetag_zone_id',
+  'richads_enabled',
+  'richads_pub_id',
+  'richads_app_id',
   'rate_in_micros',
   'rate_tier1_micros',
   'rate_global_micros',
@@ -528,6 +539,14 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
 
   const settings = await loadSettings(env.DB);
 
+  // ─── PUBLIC SETTINGS (INCLUDING ACTIVE AD CONFIG) ────────────────────────
+  if (path === '/api/settings' && method === 'GET') {
+    return jsonResponse({
+      status: 'success',
+      settings: publicSettingsView(settings),
+    });
+  }
+
   // ─── PUBLIC PAYOUTS PROOF FEED ───────────────────────────────────────────
   if (path === '/api/payouts' && method === 'GET') {
     const { results } = await env.DB.prepare(
@@ -914,10 +933,13 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
         slug: link.slug,
         link_id: link.id,
         viewer_id: user.telegram_id,
-        exp: Date.now() + 5 * 60 * 1000,
+        exp: Date.now() + 10 * 60 * 1000,
       },
       secret
     );
+
+    const adConfig = parseAdConfig(settings);
+    const firstActiveAdsGram = adConfig.adsgram_units.find((u) => u.enabled && u.block_id);
 
     return jsonResponse({
       status: 'success',
@@ -934,7 +956,9 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
         is_owner: link.owner_telegram_id === user.telegram_id,
         is_demo: link.owner_telegram_id === SYSTEM_DEMO_OWNER_ID,
       },
-      adsgram_block_id: settings.adsgram_block_id || '',
+      viewer_telegram_id: user.telegram_id,
+      adsgram_block_id: firstActiveAdsGram?.block_id || settings.adsgram_block_id || '',
+      ad_config: adConfig,
       site_name: settings.site_name || 'LinkVault',
       site_logo_url: settings.site_logo_url || '',
       verify_token: verifyTokenStr,
@@ -1631,9 +1655,21 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
         signing_secret: _s,
         ...safeSettings
       } = settings;
+      const adConfig = parseAdConfig(settings);
       return jsonResponse({
         status: 'success',
-        settings: safeSettings,
+        settings: {
+          ...safeSettings,
+          adsgram_units: JSON.stringify(adConfig.adsgram_units),
+          cleanads_units: JSON.stringify(adConfig.cleanads_units),
+          cleanads_test_mode: adConfig.cleanads_test_mode ? '1' : '0',
+          monetag_enabled: adConfig.monetag_enabled ? '1' : '0',
+          monetag_zone_id: adConfig.monetag_zone_id,
+          richads_enabled: adConfig.richads_enabled ? '1' : '0',
+          richads_pub_id: adConfig.richads_pub_id,
+          richads_app_id: adConfig.richads_app_id,
+        },
+        ad_config: adConfig,
         webhook_url: `${origin}/api/telegram/webhook`,
       });
     }
@@ -1647,16 +1683,37 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
       }
 
       const statements = [];
+      let syncedLegacyBlockId: string | null = null;
+
       for (const [key, val] of Object.entries(body)) {
         if (!ALLOWED_SETTING_KEYS.has(key)) continue;
         let strVal = String(val ?? '').trim();
+
         if (key === 'bot_username') {
           strVal = cleanBotUsername(strVal);
         } else if (key === 'app_short_name') {
           strVal = cleanAppShortName(strVal);
-        } else if (key === 'show_payout_channel') {
+        } else if (
+          key === 'show_payout_channel' ||
+          key === 'cleanads_test_mode' ||
+          key === 'monetag_enabled' ||
+          key === 'richads_enabled'
+        ) {
           strVal = strVal === '1' || strVal === 'true' ? '1' : '0';
+        } else if (key === 'monetag_zone_id') {
+          strVal = strVal.replace(/\D/g, '').slice(0, 24);
+        } else if (key === 'richads_pub_id' || key === 'richads_app_id') {
+          strVal = strVal.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+        } else if (key === 'adsgram_units') {
+          const cleanUnits = sanitizeAdsGramUnits(val, '');
+          strVal = JSON.stringify(cleanUnits);
+          const firstEnabled = cleanUnits.find((u) => u.enabled && u.block_id);
+          syncedLegacyBlockId = firstEnabled?.block_id || cleanUnits[0]?.block_id || '';
+        } else if (key === 'cleanads_units') {
+          const cleanUnits = sanitizeCleanAdsUnits(val);
+          strVal = JSON.stringify(cleanUnits);
         }
+
         if (key === 'payout_channel_url' && strVal && !validateHttpUrl(strVal)) {
           return errorResponse('Payout Channel URL must be a valid http:// or https:// URL.', 400);
         }
@@ -1667,6 +1724,15 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
           env.DB.prepare('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)').bind(
             key,
             strVal
+          )
+        );
+      }
+
+      if (syncedLegacyBlockId !== null) {
+        statements.push(
+          env.DB.prepare('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)').bind(
+            'adsgram_block_id',
+            syncedLegacyBlockId
           )
         );
       }
@@ -1683,7 +1749,22 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
         signing_secret: _s,
         ...safeSettings
       } = updated;
-      return jsonResponse({ status: 'success', settings: safeSettings });
+      const adConfig = parseAdConfig(updated);
+      return jsonResponse({
+        status: 'success',
+        settings: {
+          ...safeSettings,
+          adsgram_units: JSON.stringify(adConfig.adsgram_units),
+          cleanads_units: JSON.stringify(adConfig.cleanads_units),
+          cleanads_test_mode: adConfig.cleanads_test_mode ? '1' : '0',
+          monetag_enabled: adConfig.monetag_enabled ? '1' : '0',
+          monetag_zone_id: adConfig.monetag_zone_id,
+          richads_enabled: adConfig.richads_enabled ? '1' : '0',
+          richads_pub_id: adConfig.richads_pub_id,
+          richads_app_id: adConfig.richads_app_id,
+        },
+        ad_config: adConfig,
+      });
     }
 
     // 1-click Telegram Webhook setup

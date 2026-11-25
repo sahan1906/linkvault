@@ -160,14 +160,13 @@ export function CreateTab({ data, onLinkCreated, onPreviewUnlock }: CreateTabPro
           </div>
         </div>
 
-        {/* 1-tap Preview Unlock Flow bar for users & AdsGram reviewers */}
         <div className="px-4 sm:px-5 py-3.5 border-t border-white/10 bg-white/[0.02] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-sm font-medium text-white">
-              Test the AdsGram Unlock Experience
+              Preview Visitor Unlock Flow
             </p>
             <p className="text-xs text-zinc-400 mt-0.5">
-              Preview the compliant unlock flow visitors see before opening your destination link.
+              See the exact unlock screen visitors experience before opening your destination link.
             </p>
           </div>
           <button

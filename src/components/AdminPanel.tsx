@@ -1,15 +1,18 @@
 import {
   ArrowLeft,
+  ArrowRight,
   Ban,
   Check,
   CheckCircle2,
   Code2,
   ExternalLink,
+  Layers,
   LayoutDashboard,
   Link2,
   Lock,
   LogOut,
   Megaphone,
+  Plus,
   Search,
   Send,
   Settings,
@@ -20,10 +23,19 @@ import {
   Wallet,
   XCircle,
 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  buildUnlockSteps,
+  extractAdsGramBlockId,
+  extractCleanAdsPlacementId,
+  extractMonetagZoneId,
+  extractRichAdsIds,
+  removeMonetagScripts,
+} from '../lib/ads.ts';
 import { apiFetch } from '../lib/api.ts';
 import { formatMethodLabel, formatMicros, formatRelativeTime } from '../lib/telegram.ts';
 import type {
+  AdNetworkConfig,
   AdminDashboardMetrics,
   AdminLinkRow,
   AdminSettings,
@@ -61,15 +73,42 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
   const [adminUsers, setAdminUsers] = useState<AdminUserRow[]>([]);
 
   const [settings, setSettings] = useState<AdminSettings | null>(null);
+  const [adConfig, setAdConfig] = useState<AdNetworkConfig>({
+    adsgram_units: [
+      { id: 'ag_1', label: 'AdsGram Unit 1 (Rewarded)', block_id: '', enabled: false },
+      { id: 'ag_2', label: 'AdsGram Unit 2 (Interstitial)', block_id: '', enabled: false },
+    ],
+    cleanads_units: [
+      { id: 'ca_1', label: 'CleanAds Rewarded', placement_id: '', enabled: false },
+      { id: 'ca_2', label: 'CleanAds Interstitial', placement_id: '', enabled: false },
+    ],
+    cleanads_test_mode: false,
+    monetag_enabled: false,
+    monetag_zone_id: '',
+    richads_enabled: false,
+    richads_pub_id: '',
+    richads_app_id: '',
+  });
+  const [richAdsSnippetInput, setRichAdsSnippetInput] = useState('');
   const [webhookUrl, setWebhookUrl] = useState('');
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsNotice, setSettingsNotice] = useState('');
+  const [settingsToast, setSettingsToast] = useState('');
   const [webhookLoading, setWebhookLoading] = useState(false);
   const [logoUploading, setLogoUploading] = useState(false);
   const [logoImgError, setLogoImgError] = useState(false);
   const logoInputRef = useRef<HTMLInputElement | null>(null);
   const [newAdminPassword, setNewAdminPassword] = useState('');
   const [updatingPassword, setUpdatingPassword] = useState(false);
+
+  const liveUnlockSteps = useMemo(() => buildUnlockSteps(adConfig), [adConfig]);
+
+  const showToast = useCallback((msg: string) => {
+    setSettingsToast(msg);
+    window.setTimeout(() => {
+      setSettingsToast((cur) => (cur === msg ? '' : cur));
+    }, 3500);
+  }, []);
 
   // Admin-only Developer API state
   const [adminApiKey, setAdminApiKey] = useState('');
@@ -129,11 +168,15 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
           setAdminApiKey(res.api_key);
           setAdminApiOrigin(res.origin);
         } else if (activeSec === 'settings') {
-          const res = await apiFetch<{ settings: AdminSettings; webhook_url: string }>(
-            '/api/admin/settings',
-            { adminToken: token }
-          );
+          const res = await apiFetch<{
+            settings: AdminSettings;
+            ad_config?: AdNetworkConfig;
+            webhook_url: string;
+          }>('/api/admin/settings', { adminToken: token });
           setSettings(res.settings);
+          if (res.ad_config) {
+            setAdConfig(res.ad_config);
+          }
           setWebhookUrl(res.webhook_url);
         }
       } catch (err) {
@@ -230,13 +273,51 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
     setSavingSettings(true);
     setSettingsNotice('');
     try {
-      const res = await apiFetch<{ settings: AdminSettings }>('/api/admin/settings', {
-        method: 'PUT',
-        adminToken,
-        body: settings,
-      });
+      const normalizedAdsGram = adConfig.adsgram_units.map((u, idx) => ({
+        ...u,
+        label: u.label.trim() || `AdsGram Unit ${idx + 1}`,
+        block_id: extractAdsGramBlockId(u.block_id),
+      }));
+      const normalizedCleanAds = adConfig.cleanads_units.map((u, idx) => ({
+        ...u,
+        label: u.label.trim() || `CleanAds Unit ${idx + 1}`,
+        placement_id: extractCleanAdsPlacementId(u.placement_id),
+      }));
+      const cleanMonetagZone = extractMonetagZoneId(adConfig.monetag_zone_id);
+      const cleanRichPub = adConfig.richads_pub_id.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+      const cleanRichApp = adConfig.richads_app_id.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+
+      const payload: AdminSettings = {
+        ...settings,
+        adsgram_units: JSON.stringify(normalizedAdsGram),
+        cleanads_units: JSON.stringify(normalizedCleanAds),
+        cleanads_test_mode: adConfig.cleanads_test_mode ? '1' : '0',
+        monetag_enabled: adConfig.monetag_enabled ? '1' : '0',
+        monetag_zone_id: cleanMonetagZone,
+        richads_enabled: adConfig.richads_enabled ? '1' : '0',
+        richads_pub_id: cleanRichPub,
+        richads_app_id: cleanRichApp,
+      };
+
+      const res = await apiFetch<{ settings: AdminSettings; ad_config?: AdNetworkConfig }>(
+        '/api/admin/settings',
+        {
+          method: 'PUT',
+          adminToken,
+          body: payload,
+        }
+      );
       setSettings(res.settings);
-      setSettingsNotice('Settings saved and applied across all endpoints.');
+      if (res.ad_config) {
+        setAdConfig(res.ad_config);
+        if (!res.ad_config.monetag_enabled) {
+          removeMonetagScripts();
+        }
+      }
+      const stepCount = buildUnlockSteps(res.ad_config || adConfig).length;
+      const msg = `Settings saved (${stepCount} active unlock ${stepCount === 1 ? 'step' : 'steps'}).`;
+      setSettingsNotice(msg);
+      showToast(msg);
     } catch (err) {
       if (err instanceof Error && err.message.toLowerCase().includes('authentication')) {
         setAdminToken('');
@@ -503,7 +584,7 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
     { id: 'payouts', label: 'Payouts Queue', icon: Wallet },
     { id: 'moderation', label: 'Links & Users', icon: ShieldAlert },
     { id: 'api', label: 'Developer API', icon: Code2 },
-    { id: 'settings', label: 'AdsGram & Rates', icon: Settings },
+    { id: 'settings', label: 'Ads & Settings', icon: Settings },
     { id: 'broadcast', label: 'Broadcast', icon: Megaphone },
   ];
 
@@ -963,30 +1044,511 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
             </div>
           )}
 
-          {/* ADSGRAM & SETTINGS */}
+          {/* AD NETWORKS & SETTINGS */}
           {section === 'settings' && settings && (
             <form onSubmit={handleSaveSettings} className="space-y-6">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
-                  <h2 className="text-xl font-semibold text-white">AdsGram, Bot &amp; Rate Settings</h2>
+                  <h2 className="text-xl font-semibold text-white">Ad Networks, Bot &amp; Rate Settings</h2>
                   <p className="text-xs text-zinc-400 mt-1">
-                    Configure realistic payout tiers per 1,000 verified views, AdsGram Block ID, and Telegram Bot webhook.
+                    Configure multi-step ad unlock units, payout tiers per 1,000 verified views, and Telegram Bot webhook.
                   </p>
                 </div>
                 <button
                   type="submit"
                   disabled={savingSettings}
-                  className="min-h-[44px] px-5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-xs whitespace-nowrap shrink-0"
+                  className="min-h-[44px] px-5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-xs whitespace-nowrap shrink-0 transition-colors"
                 >
                   {savingSettings ? 'Saving...' : 'Save All Settings'}
                 </button>
               </div>
 
               {settingsNotice && (
-                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-xs text-emerald-200">
-                  {settingsNotice}
+                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-xs text-emerald-200 flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>{settingsNotice}</span>
                 </div>
               )}
+
+              {/* AD UNLOCK STEPS MANAGER */}
+              <div className="bg-[#111115] border border-white/10 rounded-2xl p-5 sm:p-6 space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shrink-0">
+                      <Layers className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-semibold text-white">Ad Unlock Steps Manager</h3>
+                      <p className="text-xs text-zinc-400">
+                        Each enabled ad unit with a valid ID becomes 1 sequential unlock step page.
+                      </p>
+                    </div>
+                  </div>
+                  <span className="font-mono text-xs font-semibold text-emerald-400 tabular-nums shrink-0">
+                    Total Unlock Steps: {liveUnlockSteps.length}
+                  </span>
+                </div>
+
+                {/* Live Sequential Step Preview Strip */}
+                <div className="rounded-xl bg-[#08080A] border border-white/10 px-4 py-3 space-y-2">
+                  <p className="text-[11px] font-medium text-zinc-400">
+                    Live Unlock Pipeline Preview
+                  </p>
+                  {liveUnlockSteps.length === 0 ? (
+                    <p className="text-xs text-zinc-500">
+                      0 active ad units enabled — visitors will see 1 quick step and unlock immediately.
+                    </p>
+                  ) : (
+                    <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                      {liveUnlockSteps.map((step, i) => (
+                        <div key={step.id} className="inline-flex items-center gap-1.5">
+                          <span className="px-2.5 py-1 rounded-lg bg-[#111115] border border-white/10 text-zinc-200 font-medium">
+                            <span className="font-mono text-emerald-400 mr-1">{i + 1}.</span>
+                            {step.label}
+                          </span>
+                          <ArrowRight className="w-3.5 h-3.5 text-zinc-600 shrink-0" />
+                        </div>
+                      ))}
+                      <span className="px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-semibold">
+                        Final Destination
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* 1. ADSGRAM MULTIPLE UNITS */}
+                <div className="rounded-xl bg-[#0B0B0E] border border-white/10 p-4 space-y-3.5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <h4 className="text-xs font-semibold text-white">AdsGram Units</h4>
+                      <p className="text-[11px] text-zinc-400">
+                        Add 1, 2, or more AdsGram Block IDs (Rewarded / Interstitial) and toggle each step independently.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAdConfig((prev) => ({
+                          ...prev,
+                          adsgram_units: [
+                            ...prev.adsgram_units,
+                            {
+                              id: `ag_${Date.now()}`,
+                              label: `AdsGram Unit ${prev.adsgram_units.length + 1}`,
+                              block_id: '',
+                              enabled: true,
+                            },
+                          ],
+                        }))
+                      }
+                      className="min-h-[36px] px-3 rounded-lg bg-emerald-500/12 border border-emerald-500/30 hover:bg-emerald-500/20 text-emerald-300 text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add AdsGram Unit</span>
+                    </button>
+                  </div>
+
+                  <div className="space-y-2.5">
+                    {adConfig.adsgram_units.map((unit, idx) => (
+                      <div
+                        key={unit.id}
+                        className="rounded-xl bg-[#111115] border border-white/10 p-3 flex flex-col sm:flex-row sm:items-center gap-2.5"
+                      >
+                        <input
+                          type="text"
+                          value={unit.label}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setAdConfig((prev) => ({
+                              ...prev,
+                              adsgram_units: prev.adsgram_units.map((u, i) =>
+                                i === idx ? { ...u, label: val } : u
+                              ),
+                            }));
+                          }}
+                          placeholder="Unit Label (e.g. AdsGram Rewarded)"
+                          className="sm:w-52 min-h-[40px] rounded-lg bg-[#08080A] border border-white/10 px-3 text-xs text-white placeholder:text-zinc-600 focus:border-emerald-500/60 focus:outline-none"
+                        />
+                        <input
+                          type="text"
+                          value={unit.block_id}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            const val = raw.includes('blockId') ? extractAdsGramBlockId(raw) : raw;
+                            setAdConfig((prev) => ({
+                              ...prev,
+                              adsgram_units: prev.adsgram_units.map((u, i) =>
+                                i === idx ? { ...u, block_id: val } : u
+                              ),
+                            }));
+                          }}
+                          onBlur={(e) => {
+                            const clean = extractAdsGramBlockId(e.target.value);
+                            if (clean !== unit.block_id) {
+                              setAdConfig((prev) => ({
+                                ...prev,
+                                adsgram_units: prev.adsgram_units.map((u, i) =>
+                                  i === idx ? { ...u, block_id: clean } : u
+                                ),
+                              }));
+                            }
+                          }}
+                          placeholder="Block ID (e.g. int-12345 or 12345)"
+                          className="flex-1 min-h-[40px] rounded-lg bg-[#08080A] border border-white/10 px-3 font-mono text-xs text-white placeholder:text-zinc-600 focus:border-emerald-500/60 focus:outline-none"
+                        />
+                        <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0">
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={unit.enabled}
+                            onClick={() =>
+                              setAdConfig((prev) => ({
+                                ...prev,
+                                adsgram_units: prev.adsgram_units.map((u, i) =>
+                                  i === idx ? { ...u, enabled: !u.enabled } : u
+                                ),
+                              }))
+                            }
+                            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors ${
+                              unit.enabled
+                                ? 'bg-emerald-500 border-emerald-400'
+                                : 'bg-[#08080A] border-white/15'
+                            }`}
+                          >
+                            <span
+                              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                unit.enabled ? 'translate-x-5' : 'translate-x-1'
+                              }`}
+                            />
+                          </button>
+                          <button
+                            type="button"
+                            aria-label="Delete AdsGram unit"
+                            onClick={() =>
+                              setAdConfig((prev) => ({
+                                ...prev,
+                                adsgram_units: prev.adsgram_units.filter((_, i) => i !== idx),
+                              }))
+                            }
+                            className="min-h-[36px] min-w-[36px] rounded-lg border border-white/10 hover:border-red-500/35 hover:bg-red-500/10 text-zinc-400 hover:text-red-300 flex items-center justify-center transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 2. CLEANADS MULTIPLE UNITS */}
+                <div className="rounded-xl bg-[#0B0B0E] border border-white/10 p-4 space-y-3.5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <h4 className="text-xs font-semibold text-white">CleanAds Units</h4>
+                      <p className="text-[11px] text-zinc-400">
+                        Paste raw <code className="font-mono text-zinc-300">pl_...</code> Placement IDs or full{' '}
+                        <code className="font-mono text-zinc-300">CleanAds.init(...)</code> snippets.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0 flex-wrap">
+                      <label className="inline-flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+                        <span>Test Mode</span>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={adConfig.cleanads_test_mode}
+                          onClick={() =>
+                            setAdConfig((prev) => ({
+                              ...prev,
+                              cleanads_test_mode: !prev.cleanads_test_mode,
+                            }))
+                          }
+                          className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors ${
+                            adConfig.cleanads_test_mode
+                              ? 'bg-emerald-500 border-emerald-400'
+                              : 'bg-[#08080A] border-white/15'
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                              adConfig.cleanads_test_mode ? 'translate-x-5' : 'translate-x-1'
+                            }`}
+                          />
+                        </button>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setAdConfig((prev) => ({
+                            ...prev,
+                            cleanads_units: [
+                              ...prev.cleanads_units,
+                              {
+                                id: `ca_${Date.now()}`,
+                                label: `CleanAds Unit ${prev.cleanads_units.length + 1}`,
+                                placement_id: '',
+                                enabled: true,
+                              },
+                            ],
+                          }))
+                        }
+                        className="min-h-[36px] px-3 rounded-lg bg-emerald-500/12 border border-emerald-500/30 hover:bg-emerald-500/20 text-emerald-300 text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Add CleanAds Unit</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2.5">
+                    {adConfig.cleanads_units.map((unit, idx) => (
+                      <div
+                        key={unit.id}
+                        className="rounded-xl bg-[#111115] border border-white/10 p-3 flex flex-col sm:flex-row sm:items-center gap-2.5"
+                      >
+                        <input
+                          type="text"
+                          value={unit.label}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setAdConfig((prev) => ({
+                              ...prev,
+                              cleanads_units: prev.cleanads_units.map((u, i) =>
+                                i === idx ? { ...u, label: val } : u
+                              ),
+                            }));
+                          }}
+                          placeholder="Unit Label (e.g. CleanAds Rewarded)"
+                          className="sm:w-52 min-h-[40px] rounded-lg bg-[#08080A] border border-white/10 px-3 text-xs text-white placeholder:text-zinc-600 focus:border-emerald-500/60 focus:outline-none"
+                        />
+                        <input
+                          type="text"
+                          value={unit.placement_id}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            const val =
+                              raw.includes('CleanAds') || raw.includes('placementId')
+                                ? extractCleanAdsPlacementId(raw)
+                                : raw;
+                            setAdConfig((prev) => ({
+                              ...prev,
+                              cleanads_units: prev.cleanads_units.map((u, i) =>
+                                i === idx ? { ...u, placement_id: val } : u
+                              ),
+                            }));
+                          }}
+                          onBlur={(e) => {
+                            const clean = extractCleanAdsPlacementId(e.target.value);
+                            if (clean !== unit.placement_id) {
+                              setAdConfig((prev) => ({
+                                ...prev,
+                                cleanads_units: prev.cleanads_units.map((u, i) =>
+                                  i === idx ? { ...u, placement_id: clean } : u
+                                ),
+                              }));
+                            }
+                          }}
+                          placeholder="pl_... or paste CleanAds.init({ placementId: '...' })"
+                          className="flex-1 min-h-[40px] rounded-lg bg-[#08080A] border border-white/10 px-3 font-mono text-xs text-white placeholder:text-zinc-600 focus:border-emerald-500/60 focus:outline-none"
+                        />
+                        <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0">
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={unit.enabled}
+                            onClick={() =>
+                              setAdConfig((prev) => ({
+                                ...prev,
+                                cleanads_units: prev.cleanads_units.map((u, i) =>
+                                  i === idx ? { ...u, enabled: !u.enabled } : u
+                                ),
+                              }))
+                            }
+                            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors ${
+                              unit.enabled
+                                ? 'bg-emerald-500 border-emerald-400'
+                                : 'bg-[#08080A] border-white/15'
+                            }`}
+                          >
+                            <span
+                              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                unit.enabled ? 'translate-x-5' : 'translate-x-1'
+                              }`}
+                            />
+                          </button>
+                          <button
+                            type="button"
+                            aria-label="Delete CleanAds unit"
+                            onClick={() =>
+                              setAdConfig((prev) => ({
+                                ...prev,
+                                cleanads_units: prev.cleanads_units.filter((_, i) => i !== idx),
+                              }))
+                            }
+                            className="min-h-[36px] min-w-[36px] rounded-lg border border-white/10 hover:border-red-500/35 hover:bg-red-500/10 text-zinc-400 hover:text-red-300 flex items-center justify-center transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 3. MONETAG & 4. RICHADS SIDE-BY-SIDE */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {/* Monetag Card */}
+                  <div className="rounded-xl bg-[#0B0B0E] border border-white/10 p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <h4 className="text-xs font-semibold text-white">Monetag</h4>
+                        <p className="text-[11px] text-zinc-400">
+                          Enter numeric Zone ID or paste the full{' '}
+                          <code className="font-mono text-zinc-300">&lt;script data-zone=&quot;...&quot;&gt;</code> tag.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={adConfig.monetag_enabled}
+                        onClick={() =>
+                          setAdConfig((prev) => ({
+                            ...prev,
+                            monetag_enabled: !prev.monetag_enabled,
+                          }))
+                        }
+                        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors ${
+                          adConfig.monetag_enabled
+                            ? 'bg-emerald-500 border-emerald-400'
+                            : 'bg-[#08080A] border-white/15'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            adConfig.monetag_enabled ? 'translate-x-5' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] text-zinc-400 mb-1">
+                        Monetag Zone ID (auto-extracts from script snippet)
+                      </label>
+                      <input
+                        type="text"
+                        value={adConfig.monetag_zone_id}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          const extracted = extractMonetagZoneId(raw);
+                          setAdConfig((prev) => ({ ...prev, monetag_zone_id: extracted }));
+                        }}
+                        placeholder="e.g. 9012345 or paste <script data-zone='9012345'...>"
+                        className="w-full min-h-[40px] rounded-lg bg-[#08080A] border border-white/10 px-3 font-mono text-xs text-white placeholder:text-zinc-600 focus:border-emerald-500/60 focus:outline-none"
+                      />
+                    </div>
+
+                    {adConfig.monetag_zone_id && (
+                      <p className="text-[11px] font-mono text-emerald-400">
+                        SDK trigger: window.show_{adConfig.monetag_zone_id}()
+                      </p>
+                    )}
+                  </div>
+
+                  {/* RichAds Card */}
+                  <div className="rounded-xl bg-[#0B0B0E] border border-white/10 p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <h4 className="text-xs font-semibold text-white">RichAds</h4>
+                        <p className="text-[11px] text-zinc-400">
+                          Deferred initialization on RichAds&apos; step (Interstitial Video → Banner fallback).
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={adConfig.richads_enabled}
+                        onClick={() =>
+                          setAdConfig((prev) => ({
+                            ...prev,
+                            richads_enabled: !prev.richads_enabled,
+                          }))
+                        }
+                        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors ${
+                          adConfig.richads_enabled
+                            ? 'bg-emerald-500 border-emerald-400'
+                            : 'bg-[#08080A] border-white/15'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            adConfig.richads_enabled ? 'translate-x-5' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] text-zinc-400 mb-1">
+                        Quick Paste RichAds Snippet (optional)
+                      </label>
+                      <input
+                        type="text"
+                        value={richAdsSnippetInput}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          const extracted = extractRichAdsIds(raw);
+                          if (extracted.pubId || extracted.appId) {
+                            setAdConfig((prev) => ({
+                              ...prev,
+                              richads_pub_id: extracted.pubId ?? prev.richads_pub_id,
+                              richads_app_id: extracted.appId ?? prev.richads_app_id,
+                            }));
+                            setRichAdsSnippetInput('');
+                          } else {
+                            setRichAdsSnippetInput(raw);
+                          }
+                        }}
+                        placeholder="Paste initialize({ pubId: '...', appId: '...' }) to auto-fill"
+                        className="w-full min-h-[38px] rounded-lg bg-[#08080A] border border-white/10 px-3 font-mono text-xs text-white placeholder:text-zinc-600 focus:border-emerald-500/60 focus:outline-none"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="block text-[11px] text-zinc-400 mb-1">Publisher ID</label>
+                        <input
+                          type="text"
+                          value={adConfig.richads_pub_id}
+                          onChange={(e) =>
+                            setAdConfig((prev) => ({
+                              ...prev,
+                              richads_pub_id: e.target.value.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64),
+                            }))
+                          }
+                          placeholder="pubId"
+                          className="w-full min-h-[40px] rounded-lg bg-[#08080A] border border-white/10 px-3 font-mono text-xs text-white placeholder:text-zinc-600 focus:border-emerald-500/60 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-zinc-400 mb-1">App ID</label>
+                        <input
+                          type="text"
+                          value={adConfig.richads_app_id}
+                          onChange={(e) =>
+                            setAdConfig((prev) => ({
+                              ...prev,
+                              richads_app_id: e.target.value.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64),
+                            }))
+                          }
+                          placeholder="appId"
+                          className="w-full min-h-[40px] rounded-lg bg-[#08080A] border border-white/10 px-3 font-mono text-xs text-white placeholder:text-zinc-600 focus:border-emerald-500/60 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
 
               {/* Brand Logo Upload Card */}
               <div className="bg-[#111115] border border-white/10 rounded-2xl p-5 space-y-4">
@@ -1064,14 +1626,13 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Telegram & AdsGram */}
+                {/* Telegram Mini App & Bot */}
                 <div className="bg-[#111115] border border-white/10 rounded-2xl p-5 space-y-4">
-                  <h3 className="text-sm font-semibold text-white">Telegram Mini App &amp; AdsGram</h3>
+                  <h3 className="text-sm font-semibold text-white">Telegram Mini App &amp; Bot</h3>
 
                   {(
                     [
                       ['site_name', 'Platform Name', 'LinkVault'],
-                      ['adsgram_block_id', 'AdsGram Block ID', 'e.g. int-12345'],
                       ['bot_username', 'Bot Username (without @, from @BotFather)', 'YourRealBot'],
                       ['app_short_name', 'Mini App Short Name (from /newapp, or leave blank for Main Mini App)', 'app'],
                       ['bot_token', 'Telegram Bot Token', '123456:ABC-DEF...'],
@@ -1344,6 +1905,18 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
           )}
         </main>
       </div>
+
+      {/* Floating Green Confirmation Toast */}
+      {settingsToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-5 right-5 z-50 rounded-xl border border-emerald-500/40 bg-[#111115]/95 backdrop-blur-md px-4 py-3 shadow-2xl flex items-center gap-2.5 text-xs font-medium text-emerald-200"
+        >
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{settingsToast}</span>
+        </div>
+      )}
     </div>
   );
 }

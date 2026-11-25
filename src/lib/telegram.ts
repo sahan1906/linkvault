@@ -148,9 +148,24 @@ export async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
-export function formatMicros(micros: number, currency = 'USDT', decimals = 2): string {
-  const val = (Number(micros) || 0) / 1_000_000;
-  const formatted = val.toFixed(decimals);
+export function formatMicros(micros: number, currency = 'USDT', decimals?: number): string {
+  const numMicros = Number(micros) || 0;
+  const val = numMicros / 1_000_000;
+
+  let d = decimals;
+  if (d === undefined) {
+    if (numMicros > 0 && numMicros < 100) {
+      d = 5;
+    } else if (numMicros > 0 && numMicros < 100_000) {
+      d = 4;
+    } else if (numMicros > 0 && numMicros % 10_000 !== 0 && numMicros < 1_000_000) {
+      d = 4;
+    } else {
+      d = 2;
+    }
+  }
+
+  const formatted = val.toFixed(d);
   if (currency === 'USD' || currency === 'USDT') {
     return `$${formatted}`;
   }
@@ -158,7 +173,10 @@ export function formatMicros(micros: number, currency = 'USDT', decimals = 2): s
     return `₹${formatted}`;
   }
   if (currency === 'Stars') {
-    return `${Math.round(val)} Stars`;
+    if (numMicros > 0 && val < 1) {
+      return `${val.toFixed(d)} Stars`;
+    }
+    return `${Number(val.toFixed(2))} Stars`;
   }
   return `${formatted} ${currency}`;
 }
