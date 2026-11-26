@@ -62,6 +62,17 @@ export interface WithdrawalRow {
   processed_at: number | null;
 }
 
+export interface GateSessionRow {
+  id: string;
+  api_key_owner_id: string;
+  external_user_id: string;
+  title: string;
+  status: 'pending' | 'completed' | 'consumed' | string;
+  created_at: string;
+  completed_at: string | null;
+  expires_at: string;
+}
+
 export interface AdsGramUnit {
   id: string;
   label: string;

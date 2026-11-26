@@ -393,7 +393,9 @@ export function UnlockScreen({ slug, onExit, onUnlocked }: UnlockScreenProps) {
                         className="w-full min-h-[50px] rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-sm inline-flex items-center justify-center gap-2 transition-colors"
                       >
                         <ExternalLink className="w-4 h-4" />
-                        <span>Open Destination Link</span>
+                        <span>
+                          {payload.link.is_api ? 'Continue Watching' : 'Open Destination Link'}
+                        </span>
                       </button>
 
                       <p className="text-center font-mono text-[11px] text-zinc-500 truncate px-2">

@@ -84,3 +84,33 @@ CREATE TABLE IF NOT EXISTS uploaded_images (
   data_base64 TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS gate_sessions (
+  id TEXT PRIMARY KEY,
+  api_key_owner_id TEXT NOT NULL,
+  external_user_id TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT 'Complete steps to unlock',
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at TIMESTAMP,
+  expires_at TIMESTAMP NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_gate_sessions_owner ON gate_sessions(api_key_owner_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_gate_sessions_expires ON gate_sessions(expires_at);
+
+
+CREATE TABLE IF NOT EXISTS gate_sessions (
+  id TEXT PRIMARY KEY,
+  api_key_owner_id TEXT NOT NULL,
+  external_user_id TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT 'Complete steps to unlock',
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at TIMESTAMP,
+  expires_at TIMESTAMP NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_gate_sessions_owner ON gate_sessions(api_key_owner_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_gate_sessions_expires ON gate_sessions(expires_at);
+

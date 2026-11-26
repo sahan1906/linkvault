@@ -135,6 +135,7 @@ export interface UnlockPayload {
     verified_clicks: number;
     is_owner: boolean;
     is_demo: boolean;
+    is_api?: boolean;
   };
   viewer_telegram_id?: string;
   adsgram_block_id: string;
@@ -142,6 +143,22 @@ export interface UnlockPayload {
   site_name: string;
   site_logo_url: string;
   verify_token: string;
+}
+
+export interface GateSessionPayload {
+  status: string;
+  session: {
+    id: string;
+    title: string;
+    status: 'pending' | 'completed' | 'consumed' | string;
+    completed_at: string | null;
+    expires_at: string;
+  };
+  viewer_telegram_id?: string;
+  ad_config?: AdNetworkConfig;
+  site_name: string;
+  site_logo_url: string;
+  complete_token: string;
 }
 
 export interface AdminDashboardMetrics {

@@ -103,6 +103,24 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
 
   const liveUnlockSteps = useMemo(() => buildUnlockSteps(adConfig), [adConfig]);
 
+  const enabledMissingIdCount = useMemo(() => {
+    let count = 0;
+    for (const u of adConfig.adsgram_units) {
+      if (u.enabled && !extractAdsGramBlockId(u.block_id)) count++;
+    }
+    for (const u of adConfig.cleanads_units) {
+      if (u.enabled && !extractCleanAdsPlacementId(u.placement_id)) count++;
+    }
+    if (adConfig.monetag_enabled && !extractMonetagZoneId(adConfig.monetag_zone_id)) count++;
+    if (
+      adConfig.richads_enabled &&
+      (!adConfig.richads_pub_id.trim() || !adConfig.richads_app_id.trim())
+    ) {
+      count++;
+    }
+    return count;
+  }, [adConfig]);
+
   const showToast = useCallback((msg: string) => {
     setSettingsToast(msg);
     window.setTimeout(() => {
@@ -1114,6 +1132,11 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
                       </span>
                     </div>
                   )}
+                  {enabledMissingIdCount > 0 && (
+                    <p className="text-[11px] text-amber-300 pt-1">
+                      {enabledMissingIdCount} {enabledMissingIdCount === 1 ? 'unit is' : 'units are'} toggled ON without an ID — enter an ID (or a test ID like <code className="font-mono">12345</code>) and click <strong className="font-semibold">Save All Settings</strong> to activate {enabledMissingIdCount === 1 ? 'it' : 'them'}.
+                    </p>
+                  )}
                 </div>
 
                 {/* 1. ADSGRAM MULTIPLE UNITS */}
@@ -1194,7 +1217,11 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
                             }
                           }}
                           placeholder="Block ID (e.g. int-12345 or 12345)"
-                          className="flex-1 min-h-[40px] rounded-lg bg-[#08080A] border border-white/10 px-3 font-mono text-xs text-white placeholder:text-zinc-600 focus:border-emerald-500/60 focus:outline-none"
+                          className={`flex-1 min-h-[40px] rounded-lg bg-[#08080A] border px-3 font-mono text-xs text-white placeholder:text-zinc-600 focus:border-emerald-500/60 focus:outline-none ${
+                            unit.enabled && !extractAdsGramBlockId(unit.block_id)
+                              ? 'border-amber-500/50'
+                              : 'border-white/10'
+                          }`}
                         />
                         <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0">
                           <button
@@ -1349,7 +1376,11 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
                             }
                           }}
                           placeholder="pl_... or paste CleanAds.init({ placementId: '...' })"
-                          className="flex-1 min-h-[40px] rounded-lg bg-[#08080A] border border-white/10 px-3 font-mono text-xs text-white placeholder:text-zinc-600 focus:border-emerald-500/60 focus:outline-none"
+                          className={`flex-1 min-h-[40px] rounded-lg bg-[#08080A] border px-3 font-mono text-xs text-white placeholder:text-zinc-600 focus:border-emerald-500/60 focus:outline-none ${
+                            unit.enabled && !extractCleanAdsPlacementId(unit.placement_id)
+                              ? 'border-amber-500/50'
+                              : 'border-white/10'
+                          }`}
                         />
                         <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0">
                           <button
@@ -1444,15 +1475,23 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
                           setAdConfig((prev) => ({ ...prev, monetag_zone_id: extracted }));
                         }}
                         placeholder="e.g. 9012345 or paste <script data-zone='9012345'...>"
-                        className="w-full min-h-[40px] rounded-lg bg-[#08080A] border border-white/10 px-3 font-mono text-xs text-white placeholder:text-zinc-600 focus:border-emerald-500/60 focus:outline-none"
+                        className={`w-full min-h-[40px] rounded-lg bg-[#08080A] border px-3 font-mono text-xs text-white placeholder:text-zinc-600 focus:border-emerald-500/60 focus:outline-none ${
+                          adConfig.monetag_enabled && !extractMonetagZoneId(adConfig.monetag_zone_id)
+                            ? 'border-amber-500/50'
+                            : 'border-white/10'
+                        }`}
                       />
                     </div>
 
-                    {adConfig.monetag_zone_id && (
+                    {adConfig.monetag_zone_id ? (
                       <p className="text-[11px] font-mono text-emerald-400">
                         SDK trigger: window.show_{adConfig.monetag_zone_id}()
                       </p>
-                    )}
+                    ) : adConfig.monetag_enabled ? (
+                      <p className="text-[11px] text-amber-300">
+                        Enter a numeric Zone ID to activate this step.
+                      </p>
+                    ) : null}
                   </div>
 
                   {/* RichAds Card */}
@@ -1546,6 +1585,12 @@ export function AdminPanel({ onBackToApp }: AdminPanelProps) {
                         />
                       </div>
                     </div>
+                    {adConfig.richads_enabled &&
+                      (!adConfig.richads_pub_id.trim() || !adConfig.richads_app_id.trim()) && (
+                        <p className="text-[11px] text-amber-300">
+                          Enter both Publisher ID and App ID to activate this step.
+                        </p>
+                      )}
                   </div>
                 </div>
               </div>

@@ -3,6 +3,7 @@ import {
   hashPassword,
   randomApiKey,
   randomFileId,
+  randomGateSessionId,
   randomSlug,
   sha256Hex,
   signToken,
@@ -13,9 +14,11 @@ import {
 } from './crypto.ts';
 import {
   buildPicLinkUrl,
+  buildTelegramGateUrl,
   buildTelegramUrl,
   cleanAppShortName,
   cleanBotUsername,
+  ensureGateSessionsTable,
   errorResponse,
   extractDomain,
   getDayBucket,
@@ -32,10 +35,20 @@ import {
   validateHttpUrl,
   validateImageUrl,
 } from './helpers.ts';
-import type { AppSettingsMap, D1Database, Env, LinkRow, UserRow, WithdrawalRow } from './types.ts';
+import type {
+  AppSettingsMap,
+  D1Database,
+  Env,
+  GateSessionRow,
+  LinkRow,
+  UserRow,
+  WithdrawalRow,
+} from './types.ts';
 
 const DEMO_CREATOR_ID = '100000001';
 const SYSTEM_DEMO_OWNER_ID = '900000001';
+const ADMIN_API_OWNER_ID = '900000002';
+const SEEDED_DEMO_SLUGS = new Set(['creator-kit', 'piclink-demo']);
 
 const ALLOWED_SETTING_KEYS = new Set([
   'site_name',
@@ -374,7 +387,7 @@ export async function handlePublicShortenApi(
     return errorResponse('Invalid Admin API key', 401);
   }
 
-  const owner = await ensureUser(env.DB, SYSTEM_DEMO_OWNER_ID, 'linkvault_admin');
+  const owner = await ensureUser(env.DB, ADMIN_API_OWNER_ID, 'linkvault_api');
 
   const validatedDest = validateHttpUrl(destUrl);
   if (!validatedDest) {
@@ -538,6 +551,305 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
   }
 
   const settings = await loadSettings(env.DB);
+
+  // ─── REWARDED AD GATE API (CLOSE & VERIFY MODE) ──────────────────────────
+  const GATE_ID_REGEX = /^gate_[a-zA-Z0-9]{16}$/;
+
+  if (path === '/api/v1/gate/create' && method === 'POST') {
+    let body: Record<string, unknown> = {};
+    try {
+      const text = await request.text();
+      if (text.trim()) {
+        body = JSON.parse(text) as Record<string, unknown>;
+      }
+    } catch {
+      return errorResponse('Invalid JSON payload', 400);
+    }
+
+    const apiKey = (
+      request.headers.get('X-API-Key') ||
+      String(body.api_key || body.api || '')
+    ).trim();
+    if (!apiKey) {
+      return errorResponse('Missing API key (provide X-API-Key header)', 401);
+    }
+
+    const storedAdminKey = (settings.admin_api_key || '').trim();
+    if (!storedAdminKey) {
+      return errorResponse(
+        'Admin Developer API key is not initialized yet. Open /admin to generate it.',
+        403
+      );
+    }
+
+    const keyValid = await verifyPlaintextConstantTime(apiKey, storedAdminKey);
+    if (!keyValid) {
+      return errorResponse('Invalid API key', 401);
+    }
+
+    await ensureGateSessionsTable(env.DB);
+
+    const ownerKeyHash = await sha256Hex(storedAdminKey);
+    const titleRaw = typeof body.title === 'string' ? body.title.trim().slice(0, 120) : '';
+    const title = titleRaw || 'Complete steps to unlock';
+    const externalUserId =
+      body.external_user_id !== undefined && body.external_user_id !== null
+        ? String(body.external_user_id).trim().slice(0, 64)
+        : '';
+
+    let sessionId = '';
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const candidate = randomGateSessionId();
+      const exists = await env.DB.prepare('SELECT id FROM gate_sessions WHERE id = ? LIMIT 1')
+        .bind(candidate)
+        .first();
+      if (!exists) {
+        sessionId = candidate;
+        break;
+      }
+    }
+    if (!sessionId) {
+      return errorResponse('Could not allocate gate session ID, please retry', 500);
+    }
+
+    const expiresIn = 1800;
+    const nowMs = Date.now();
+    const createdAtIso = new Date(nowMs).toISOString();
+    const expiresAtIso = new Date(nowMs + expiresIn * 1000).toISOString();
+
+    await env.DB.prepare(
+      `INSERT INTO gate_sessions (id, api_key_owner_id, external_user_id, title, status, created_at, completed_at, expires_at)
+       VALUES (?, ?, ?, ?, 'pending', ?, NULL, ?)`
+    )
+      .bind(sessionId, ownerKeyHash, externalUserId, title, createdAtIso, expiresAtIso)
+      .run();
+
+    const cleanOrigin = origin.replace(/\/+$/, '');
+    return jsonResponse({
+      session_id: sessionId,
+      telegram_url: buildTelegramGateUrl(sessionId, settings),
+      web_url: `${cleanOrigin}/?startapp=${encodeURIComponent(sessionId)}`,
+      expires_in: expiresIn,
+    });
+  }
+
+  const gateStatusMatch = path.match(/^\/api\/v1\/gate\/status\/([^/]+)$/);
+  if (gateStatusMatch && method === 'GET') {
+    const apiKey = (
+      request.headers.get('X-API-Key') ||
+      url.searchParams.get('api') ||
+      ''
+    ).trim();
+    if (!apiKey) {
+      return errorResponse('Missing API key (provide X-API-Key header)', 401);
+    }
+
+    const storedAdminKey = (settings.admin_api_key || '').trim();
+    if (!storedAdminKey) {
+      return errorResponse(
+        'Admin Developer API key is not initialized yet. Open /admin to generate it.',
+        403
+      );
+    }
+
+    const keyValid = await verifyPlaintextConstantTime(apiKey, storedAdminKey);
+    if (!keyValid) {
+      return errorResponse('Invalid API key', 401);
+    }
+
+    const sessionId = decodeURIComponent(gateStatusMatch[1]).trim();
+    if (!GATE_ID_REGEX.test(sessionId)) {
+      return errorResponse('Invalid gate session ID format', 400);
+    }
+
+    await ensureGateSessionsTable(env.DB);
+    const ownerKeyHash = await sha256Hex(storedAdminKey);
+
+    const session = await env.DB.prepare('SELECT * FROM gate_sessions WHERE id = ? LIMIT 1')
+      .bind(sessionId)
+      .first<GateSessionRow>();
+
+    if (!session || session.api_key_owner_id !== ownerKeyHash) {
+      return errorResponse('Gate session not found', 404);
+    }
+
+    const isExpired =
+      session.status === 'pending' && Date.parse(session.expires_at) <= Date.now();
+    if (isExpired) {
+      return jsonResponse({
+        session_id: session.id,
+        status: 'expired',
+        completed: false,
+        completed_at: null,
+      });
+    }
+
+    if (session.status === 'pending') {
+      return jsonResponse({
+        session_id: session.id,
+        status: 'pending',
+        completed: false,
+        completed_at: null,
+      });
+    }
+
+    if (session.status === 'consumed') {
+      return jsonResponse({
+        session_id: session.id,
+        status: 'consumed',
+        completed: false,
+        completed_at: session.completed_at,
+      });
+    }
+
+    // Status is 'completed'
+    const consumeFlag = url.searchParams.get('consume');
+    const shouldConsume = consumeFlag === '1' || consumeFlag === 'true';
+
+    if (shouldConsume) {
+      const updateRes = await env.DB.prepare(
+        `UPDATE gate_sessions
+         SET status = 'consumed'
+         WHERE id = ? AND api_key_owner_id = ? AND status = 'completed'`
+      )
+        .bind(session.id, ownerKeyHash)
+        .run();
+
+      const claimedNow = updateRes.meta.changes > 0;
+      return jsonResponse({
+        session_id: session.id,
+        status: 'consumed',
+        completed: claimedNow,
+        completed_at: session.completed_at,
+      });
+    }
+
+    return jsonResponse({
+      session_id: session.id,
+      status: 'completed',
+      completed: true,
+      completed_at: session.completed_at,
+    });
+  }
+
+  // Internal frontend loader for startapp=gate_...
+  const gateSessionMatch = path.match(/^\/api\/gate\/session\/([^/]+)$/);
+  if (gateSessionMatch && method === 'GET') {
+    const sessionId = decodeURIComponent(gateSessionMatch[1]).trim();
+    if (!GATE_ID_REGEX.test(sessionId)) {
+      return errorResponse('Invalid gate session link.', 400);
+    }
+
+    await ensureGateSessionsTable(env.DB);
+    const session = await env.DB.prepare('SELECT * FROM gate_sessions WHERE id = ? LIMIT 1')
+      .bind(sessionId)
+      .first<GateSessionRow>();
+
+    if (!session) {
+      return errorResponse('This unlock session does not exist.', 404);
+    }
+
+    const isExpired =
+      session.status === 'pending' && Date.parse(session.expires_at) <= Date.now();
+    if (isExpired) {
+      return errorResponse('This unlock session has expired. Return to the app to start again.', 410);
+    }
+
+    const { user } = await resolveCurrentUser(request, env, settings);
+    const secret = await resolveSigningSecret(env, settings);
+    const completeToken = await signToken(
+      {
+        session_id: session.id,
+        exp: Date.now() + 30 * 60 * 1000,
+      },
+      secret
+    );
+
+    const adConfig = parseAdConfig(settings);
+
+    return jsonResponse({
+      status: 'success',
+      session: {
+        id: session.id,
+        title: session.title || 'Complete steps to unlock',
+        status: session.status,
+        completed_at: session.completed_at,
+        expires_at: session.expires_at,
+      },
+      viewer_telegram_id: user.telegram_id || session.external_user_id || '',
+      ad_config: adConfig,
+      site_name: settings.site_name || 'LinkVault',
+      site_logo_url: settings.site_logo_url || '',
+      complete_token: completeToken,
+    });
+  }
+
+  // Internal frontend completion call on final step of Rewarded Ad Gate
+  if (path === '/api/gate/complete' && method === 'POST') {
+    let body: { session_id?: string; token?: string } = {};
+    try {
+      body = (await request.json()) as typeof body;
+    } catch {
+      return errorResponse('Invalid JSON payload', 400);
+    }
+
+    const sessionId = String(body.session_id || '').trim();
+    if (!GATE_ID_REGEX.test(sessionId)) {
+      return errorResponse('Invalid gate session_id', 400);
+    }
+
+    if (body.token) {
+      const secret = await resolveSigningSecret(env, settings);
+      const verified = await verifyToken<{ session_id: string; exp: number }>(body.token, secret);
+      if (!verified || verified.session_id !== sessionId) {
+        return errorResponse('Invalid or expired completion token', 401);
+      }
+    }
+
+    await ensureGateSessionsTable(env.DB);
+    const session = await env.DB.prepare('SELECT * FROM gate_sessions WHERE id = ? LIMIT 1')
+      .bind(sessionId)
+      .first<GateSessionRow>();
+
+    if (!session) {
+      return errorResponse('Gate session not found', 404);
+    }
+
+    if (session.status === 'consumed') {
+      return errorResponse('This unlock session has already been consumed.', 409);
+    }
+
+    if (session.status === 'completed') {
+      return jsonResponse({
+        status: 'success',
+        session_id: session.id,
+        gate_status: 'completed',
+        completed: true,
+        completed_at: session.completed_at,
+      });
+    }
+
+    if (Date.parse(session.expires_at) <= Date.now()) {
+      return errorResponse('This unlock session has expired.', 410);
+    }
+
+    const completedAtIso = new Date().toISOString();
+    await env.DB.prepare(
+      `UPDATE gate_sessions
+       SET status = 'completed', completed_at = ?
+       WHERE id = ? AND status = 'pending'`
+    )
+      .bind(completedAtIso, session.id)
+      .run();
+
+    return jsonResponse({
+      status: 'success',
+      session_id: session.id,
+      gate_status: 'completed',
+      completed: true,
+      completed_at: completedAtIso,
+    });
+  }
 
   // ─── PUBLIC SETTINGS (INCLUDING ACTIVE AD CONFIG) ────────────────────────
   if (path === '/api/settings' && method === 'GET') {
@@ -940,6 +1252,11 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
 
     const adConfig = parseAdConfig(settings);
     const firstActiveAdsGram = adConfig.adsgram_units.find((u) => u.enabled && u.block_id);
+    const isSeededDemo =
+      link.owner_telegram_id === SYSTEM_DEMO_OWNER_ID && SEEDED_DEMO_SLUGS.has(link.slug);
+    const isApiLink =
+      link.owner_telegram_id === ADMIN_API_OWNER_ID ||
+      (link.owner_telegram_id === SYSTEM_DEMO_OWNER_ID && !SEEDED_DEMO_SLUGS.has(link.slug));
 
     return jsonResponse({
       status: 'success',
@@ -954,7 +1271,8 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
         domain: extractDomain(link.destination_url),
         verified_clicks: link.verified_clicks,
         is_owner: link.owner_telegram_id === user.telegram_id,
-        is_demo: link.owner_telegram_id === SYSTEM_DEMO_OWNER_ID,
+        is_demo: isSeededDemo,
+        is_api: isApiLink,
       },
       viewer_telegram_id: user.telegram_id,
       adsgram_block_id: firstActiveAdsGram?.block_id || settings.adsgram_block_id || '',
@@ -1008,7 +1326,9 @@ export async function handleApiRequest(request: Request, env: Env): Promise<Resp
     }
 
     // System demo link preview
-    if (link.owner_telegram_id === SYSTEM_DEMO_OWNER_ID || body.preview_mode) {
+    const isSeededDemo =
+      link.owner_telegram_id === SYSTEM_DEMO_OWNER_ID && SEEDED_DEMO_SLUGS.has(link.slug);
+    if (isSeededDemo || body.preview_mode) {
       return jsonResponse({
         status: 'success',
         destination_url: link.destination_url,

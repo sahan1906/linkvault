@@ -163,6 +163,36 @@ export function buildTelegramUrl(slug: string, settings: AppSettingsMap): string
   return `https://t.me/${encodeURIComponent(bot)}?startapp=r_${encodeURIComponent(slug)}`;
 }
 
+export function buildTelegramGateUrl(sessionId: string, settings: AppSettingsMap): string {
+  const bot = cleanBotUsername(settings.bot_username) || 'LinkVaultAppBot';
+  const app = cleanAppShortName(settings.app_short_name);
+  if (app) {
+    return `https://t.me/${encodeURIComponent(bot)}/${encodeURIComponent(app)}?startapp=${encodeURIComponent(sessionId)}`;
+  }
+  return `https://t.me/${encodeURIComponent(bot)}?startapp=${encodeURIComponent(sessionId)}`;
+}
+
+let gateTableEnsured = false;
+
+export async function ensureGateSessionsTable(db: D1Database): Promise<void> {
+  if (gateTableEnsured) return;
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS gate_sessions (
+        id TEXT PRIMARY KEY,
+        api_key_owner_id TEXT NOT NULL,
+        external_user_id TEXT NOT NULL DEFAULT '',
+        title TEXT NOT NULL DEFAULT 'Complete steps to unlock',
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        completed_at TIMESTAMP,
+        expires_at TIMESTAMP NOT NULL
+      )`
+    )
+    .run();
+  gateTableEnsured = true;
+}
+
 export function buildPicLinkUrl(origin: string, slug: string): string {
   const cleanOrigin = origin.replace(/\/+$/, '');
   return `${cleanOrigin}/r/${encodeURIComponent(slug)}`;

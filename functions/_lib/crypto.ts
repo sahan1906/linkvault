@@ -218,6 +218,17 @@ export function randomFileId(): string {
   return `img_${bytesToHex(bytes)}`;
 }
 
+export function randomGateSessionId(): string {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  let out = '';
+  for (let i = 0; i < 16; i++) {
+    out += alphabet[bytes[i] % alphabet.length];
+  }
+  return `gate_${out}`;
+}
+
 let ephemeralSecret: string | null = null;
 export function getSigningSecret(envSecret?: string): string {
   if (envSecret && envSecret.trim().length >= 16) {

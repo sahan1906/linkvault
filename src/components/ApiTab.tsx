@@ -38,6 +38,19 @@ export function ApiTab({
     body: string;
   } | null>(null);
 
+  // Rewarded Ad Gate API Tester state
+  const [gateTitle, setGateTitle] = useState('Unlock Next Reels');
+  const [gateExtUser, setGateExtUser] = useState('123456789');
+  const [gateTesting, setGateTesting] = useState(false);
+  const [copiedGateSnippet, setCopiedGateSnippet] = useState(false);
+  const [gateResult, setGateResult] = useState<{
+    status: number;
+    ms: number;
+    body: string;
+    sessionId?: string;
+    webUrl?: string;
+  } | null>(null);
+
   const baseOrigin = origin || window.location.origin;
   const maskedKey = apiKey ? `${apiKey.slice(0, 7)}${'•'.repeat(18)}${apiKey.slice(-4)}` : '';
   const displayKey = revealKey ? apiKey : maskedKey;
@@ -162,6 +175,81 @@ print(data["telegram_url"], data["piclink_url"])`,
       });
     } finally {
       setTesting(false);
+    }
+  };
+
+  const gateSnippet = `# 1. Create a 30-min Rewarded Ad Gate session
+curl -X POST "${baseOrigin}/api/v1/gate/create" \\
+  -H "Content-Type: application/json" \\
+  -H "X-API-Key: ${apiKey}" \\
+  -d '{"title": "Unlock Next Reels", "external_user_id": "123456789"}'
+
+# 2. Verify & consume once user returns from Telegram.WebApp.close()
+curl "${baseOrigin}/api/v1/gate/status/gate_SESSION_ID?consume=1" \\
+  -H "X-API-Key: ${apiKey}"`;
+
+  const handleCopyGateSnippet = async () => {
+    const ok = await copyToClipboard(gateSnippet);
+    if (ok) {
+      setCopiedGateSnippet(true);
+      setTimeout(() => setCopiedGateSnippet(false), 1600);
+    }
+  };
+
+  const handleCreateGateTest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setGateTesting(true);
+    const start = performance.now();
+    try {
+      const res = await fetch('/api/v1/gate/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': apiKey,
+        },
+        body: JSON.stringify({
+          title: gateTitle.trim() || undefined,
+          external_user_id: gateExtUser.trim() || undefined,
+        }),
+      });
+      const json = (await res.json()) as { session_id?: string; web_url?: string };
+      setGateResult({
+        status: res.status,
+        ms: Math.round(performance.now() - start),
+        body: JSON.stringify(json, null, 2),
+        sessionId: json.session_id,
+        webUrl: json.web_url,
+      });
+      if (res.ok) triggerHaptic('success');
+    } catch (err) {
+      setGateResult({
+        status: 0,
+        ms: Math.round(performance.now() - start),
+        body: JSON.stringify({ error: err instanceof Error ? err.message : 'Network error' }, null, 2),
+      });
+    } finally {
+      setGateTesting(false);
+    }
+  };
+
+  const handleCheckGateStatus = async (sessionId: string, consume: boolean) => {
+    setGateTesting(true);
+    const start = performance.now();
+    try {
+      const res = await fetch(
+        `/api/v1/gate/status/${encodeURIComponent(sessionId)}${consume ? '?consume=1' : ''}`,
+        { headers: { 'X-API-Key': apiKey } }
+      );
+      const json = await res.json();
+      setGateResult((prev) => ({
+        status: res.status,
+        ms: Math.round(performance.now() - start),
+        body: JSON.stringify(json, null, 2),
+        sessionId: prev?.sessionId,
+        webUrl: prev?.webUrl,
+      }));
+    } finally {
+      setGateTesting(false);
     }
   };
 
@@ -385,6 +473,130 @@ print(data["telegram_url"], data["piclink_url"])`,
           )}
         </section>
       </div>
+
+      {/* Rewarded Ad Gate (Close & Verify) Partner API */}
+      <section className="bg-[#111115] border border-white/10 rounded-2xl p-5 sm:p-6 space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 className="text-base font-semibold text-white">
+              Rewarded Ad Gate API (Close &amp; Verify)
+            </h3>
+            <p className="text-xs text-zinc-400 mt-0.5">
+              For partner Telegram Mini Apps: send users through your multi-step ad flow, then auto-close back via{' '}
+              <code className="font-mono text-zinc-300">Telegram.WebApp.close()</code> and verify completion server-side.
+            </p>
+          </div>
+          <span className="text-xs font-mono text-emerald-400 shrink-0">30-Min TTL · One-Time Consume</span>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+          <div className="lg:col-span-7 bg-[#08080A] border border-white/10 rounded-xl overflow-hidden">
+            <div className="px-4 py-2.5 border-b border-white/10 flex items-center justify-between gap-2">
+              <span className="font-mono text-[11px] text-zinc-400">
+                POST /api/v1/gate/create · GET /api/v1/gate/status/:id?consume=1
+              </span>
+              <button
+                type="button"
+                onClick={handleCopyGateSnippet}
+                className="min-h-[32px] px-2.5 rounded-lg border border-white/10 hover:bg-white/5 text-xs font-medium text-zinc-300 inline-flex items-center gap-1.5 whitespace-nowrap"
+              >
+                {copiedGateSnippet ? (
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" />
+                )}
+                <span>{copiedGateSnippet ? 'Copied' : 'Copy'}</span>
+              </button>
+            </div>
+            <pre className="p-4 overflow-x-auto font-mono text-xs leading-relaxed text-zinc-300">
+              <code>{gateSnippet}</code>
+            </pre>
+          </div>
+
+          <div className="lg:col-span-5 space-y-3.5">
+            <form onSubmit={handleCreateGateTest} className="space-y-3">
+              <div>
+                <label className="block text-xs text-zinc-300 mb-1">Gate Title</label>
+                <input
+                  type="text"
+                  value={gateTitle}
+                  onChange={(e) => setGateTitle(e.target.value)}
+                  placeholder="Unlock Next Reels"
+                  className="w-full min-h-[40px] rounded-xl bg-[#08080A] border border-white/10 px-3 text-xs text-white focus:border-emerald-500/60 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-zinc-300 mb-1">
+                  External User ID (optional)
+                </label>
+                <input
+                  type="text"
+                  value={gateExtUser}
+                  onChange={(e) => setGateExtUser(e.target.value)}
+                  placeholder="123456789"
+                  className="w-full min-h-[40px] rounded-xl bg-[#08080A] border border-white/10 px-3 font-mono text-xs text-white focus:border-emerald-500/60 focus:outline-none"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={gateTesting}
+                className="w-full min-h-[42px] rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-zinc-950 font-semibold text-xs inline-flex items-center justify-center gap-2 transition-colors"
+              >
+                <Play className="w-3.5 h-3.5 fill-current" />
+                <span>{gateTesting ? 'Running...' : 'Create Test Gate Session'}</span>
+              </button>
+            </form>
+
+            {gateResult && (
+              <div className="space-y-2.5 pt-2 border-t border-white/10">
+                <div className="flex items-center justify-between text-xs font-mono">
+                  <span
+                    className={
+                      gateResult.status >= 200 && gateResult.status < 300
+                        ? 'text-emerald-400'
+                        : 'text-red-400'
+                    }
+                  >
+                    HTTP {gateResult.status}
+                  </span>
+                  <span className="text-zinc-500 tabular-nums">{gateResult.ms} ms</span>
+                </div>
+                <pre className="p-3 rounded-xl bg-[#08080A] border border-white/10 overflow-x-auto font-mono text-[11px] leading-relaxed text-zinc-200 max-h-48">
+                  <code>{gateResult.body}</code>
+                </pre>
+                {gateResult.sessionId && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <a
+                      href={`/?startapp=${encodeURIComponent(gateResult.sessionId)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="min-h-[34px] px-3 rounded-lg bg-emerald-500/15 border border-emerald-500/35 text-emerald-300 text-xs font-medium inline-flex items-center"
+                    >
+                      Open Gate Preview
+                    </a>
+                    <button
+                      type="button"
+                      disabled={gateTesting}
+                      onClick={() => handleCheckGateStatus(gateResult.sessionId!, false)}
+                      className="min-h-[34px] px-3 rounded-lg border border-white/10 hover:bg-white/5 text-zinc-200 text-xs"
+                    >
+                      Check Status
+                    </button>
+                    <button
+                      type="button"
+                      disabled={gateTesting}
+                      onClick={() => handleCheckGateStatus(gateResult.sessionId!, true)}
+                      className="min-h-[34px] px-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-200 text-xs"
+                    >
+                      Verify &amp; Consume
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
     </div>
   );
 }

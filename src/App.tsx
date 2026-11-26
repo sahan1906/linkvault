@@ -2,12 +2,18 @@ import { Link2, PlusCircle, ShieldCheck, Wallet } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { AdminPanel } from './components/AdminPanel.tsx';
 import { CreateTab } from './components/CreateTab.tsx';
+import { GateUnlockScreen } from './components/GateUnlockScreen.tsx';
 import { LinksTab } from './components/LinksTab.tsx';
 import { UnlockScreen } from './components/UnlockScreen.tsx';
 import { WalletTab } from './components/WalletTab.tsx';
 import { removeMonetagScripts } from './lib/ads.ts';
 import { apiFetch } from './lib/api.ts';
-import { formatMicros, getStartAppSlug, initTelegramWebApp } from './lib/telegram.ts';
+import {
+  formatMicros,
+  getStartAppGateSessionId,
+  getStartAppSlug,
+  initTelegramWebApp,
+} from './lib/telegram.ts';
 import type { BootstrapResponse, LinkItem, WalletResponse } from './lib/types.ts';
 
 type TabKey = 'create' | 'links' | 'wallet';
@@ -17,6 +23,9 @@ export default function App() {
     window.location.pathname.startsWith('/admin')
   );
   const [unlockSlug, setUnlockSlug] = useState<string | null>(() => getStartAppSlug());
+  const [gateSessionId, setGateSessionId] = useState<string | null>(() =>
+    getStartAppGateSessionId()
+  );
   const [activeTab, setActiveTab] = useState<TabKey>('create');
 
   const [bootstrap, setBootstrap] = useState<BootstrapResponse | null>(null);
@@ -32,6 +41,7 @@ export default function App() {
     const onPopState = () => {
       setIsAdminRoute(window.location.pathname.startsWith('/admin'));
       setUnlockSlug(getStartAppSlug());
+      setGateSessionId(getStartAppGateSessionId());
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
@@ -72,16 +82,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!isAdminRoute) {
+    if (!isAdminRoute && !gateSessionId) {
       loadBootstrap();
     }
-  }, [isAdminRoute, loadBootstrap]);
+  }, [isAdminRoute, gateSessionId, loadBootstrap]);
 
   useEffect(() => {
-    if (isAdminRoute || unlockSlug) return;
+    if (isAdminRoute || unlockSlug || gateSessionId) return;
     if (activeTab === 'links') loadLinks();
     if (activeTab === 'wallet') loadWallet();
-  }, [activeTab, isAdminRoute, unlockSlug, loadLinks, loadWallet]);
+  }, [activeTab, isAdminRoute, unlockSlug, gateSessionId, loadLinks, loadWallet]);
 
   // Hidden /admin route (never linked in user UI)
   if (isAdminRoute) {
@@ -90,6 +100,23 @@ export default function App() {
         onBackToApp={() => {
           window.history.pushState({}, '', '/');
           setIsAdminRoute(false);
+          loadBootstrap();
+        }}
+      />
+    );
+  }
+
+  // Rewarded Ad Gate Screen (startapp=gate_...)
+  if (gateSessionId) {
+    return (
+      <GateUnlockScreen
+        sessionId={gateSessionId}
+        onExit={() => {
+          const url = new URL(window.location.href);
+          url.searchParams.delete('startapp');
+          url.searchParams.delete('tgWebAppStartParam');
+          window.history.replaceState({}, '', url.pathname + url.search);
+          setGateSessionId(null);
           loadBootstrap();
         }}
       />

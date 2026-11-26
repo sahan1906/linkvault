@@ -10,6 +10,7 @@ interface TelegramWebApp {
   };
   ready?: () => void;
   expand?: () => void;
+  close?: () => void;
   setHeaderColor?: (color: string) => void;
   setBackgroundColor?: (color: string) => void;
   openLink?: (url: string, options?: { try_instant_view?: boolean }) => void;
@@ -65,6 +66,38 @@ export function getStartAppSlug(): string | null {
     return trimmed.slice(2);
   }
   return null;
+}
+
+export function getStartAppGateSessionId(): string | null {
+  const urlParams = new URLSearchParams(window.location.search);
+  const rawParam =
+    urlParams.get('startapp') ||
+    urlParams.get('tgWebAppStartParam') ||
+    window.Telegram?.WebApp?.initDataUnsafe?.start_param ||
+    '';
+
+  const trimmed = rawParam.trim();
+  if (/^gate_[a-zA-Z0-9]{16}$/.test(trimmed)) {
+    return trimmed;
+  }
+  return null;
+}
+
+export function isInsideTelegramWebApp(): boolean {
+  return Boolean(window.Telegram?.WebApp?.initData);
+}
+
+export function closeTelegramWebApp(): boolean {
+  const tg = window.Telegram?.WebApp;
+  if (tg && typeof tg.close === 'function' && Boolean(tg.initData)) {
+    try {
+      tg.close();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 export function triggerHaptic(kind: 'light' | 'success' | 'error' = 'light'): void {
